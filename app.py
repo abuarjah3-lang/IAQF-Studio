@@ -94,6 +94,8 @@ if result:
             "الدرجة": item.get("score", "NA"),
             "الشاهد من النص": item.get("evidence", ""),
             "التبرير": item.get("rationale", ""),
+            "الثقة": item.get("confidence", "—"),
+            "سبب NA": item.get("na_reason") or "—",
         })
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -116,7 +118,7 @@ if result:
 
     report = {
         "framework": "IAQF",
-        "version": "2.0-demo",
+        "version": result.get("version", "2.1-demo"),
         "overall_score": overall,
         "dimensions": result.get("dimensions", {}),
         "coverage": coverage,
