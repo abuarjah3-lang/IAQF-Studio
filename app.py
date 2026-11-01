@@ -96,9 +96,15 @@ if result:
             "التبرير": item.get("rationale", ""),
             "الثقة": item.get("confidence", "—"),
             "سبب NA": item.get("na_reason") or "—",
+            "مطابقة الشاهد": item.get("evidence_status", "—"),
         })
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+    if result.get("evidence_repair_attempted"):
+        st.info("أُعيدت محاولة استخراج الشاهد للمؤشرات: " + ", ".join(result["evidence_repair_attempted"]))
+    if result.get("evidence_validation_note"):
+        st.caption(result["evidence_validation_note"])
 
     st.subheader("نقاط القوة")
     for item in result.get("strengths", []):
@@ -118,7 +124,7 @@ if result:
 
     report = {
         "framework": "IAQF",
-        "version": result.get("version", "2.1-demo"),
+        "version": result.get("version", "2.2-demo"),
         "overall_score": overall,
         "dimensions": result.get("dimensions", {}),
         "coverage": coverage,
@@ -127,6 +133,8 @@ if result:
         "issues": result.get("issues", []),
         "recommendations": result.get("recommendations", []),
         "limitations": result.get("limitations", []),
+        "evidence_repair_attempted": result.get("evidence_repair_attempted", []),
+        "evidence_validation_note": result.get("evidence_validation_note", ""),
     }
     st.download_button(
         "⬇️ تنزيل تقرير التقييم (JSON)",

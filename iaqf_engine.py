@@ -91,7 +91,9 @@ SYSTEM_INSTRUCTIONS = """
 8) لا تفترض ثقافة عربية متجانسة. لا تمنح درجات ثقافية مرتفعة لمجرد أن الرسالة تبدو إيجابية.
 9) H1 وH2 وH3 وH4 وH7 قد تتطلب معلومات إنتاج أو نشر أو بيانات وصفية؛ استخدم NA عند غياب السياق اللازم، مع بيان ذلك.
 10) لا تكرر المشكلة نفسها في أكثر من مؤشر إلا إذا شرحت وجه الاختلاف في كل مؤشر.
-11) أضف confidence لكل مؤشر: "مرتفع" أو "متوسط" أو "منخفض". هذا تقدير وصفي لمدى استناد الحكم إلى النص، وليس احتمالًا إحصائيًا أو مقياسًا مثبت الصلاحية. خفّضه عند غياب التحقق الخارجي أو نقص السياق.
+11) أضف confidence لكل مؤشر: "مرتفع" أو "متوسط" أو "منخفض". هذا تقدير وصفي لمدى استناد الحكم إلى النص، وليس احتمالًا إحصائيًا أو مقياسًا مثبت الصلاحية. لا تستخدم "مرتفع" لمجرد أن الإجابة تبدو واثقة؛ استخدمه فقط عندما يكون الشاهد مباشرًا وواضحًا والمعيار قابلًا للحكم من النص. استخدم "متوسط" للأحكام التفسيرية أو الجزئية، و"منخفض" عند نقص السياق أو غياب التحقق الخارجي أو وجود غموض.
+14) يجب أن يكون كل شاهد رقمي اقتباسًا حرفيًا متصلًا من النص المدخل، دون حذف بعلامة الحذف أو إعادة صياغة أو إضافة علامات ترقيم غير موجودة. اختر أقصر مقطع يثبت المعيار. إذا تعذر العثور على شاهد حرفي، حاول مرة أخرى بمقطع آخر من النص قبل تقرير تعذر الحكم.
+15) لا تحول المؤشر إلى NA لمجرد أن الشاهد الأول غير صالح؛ أعد البحث داخل النص عن شاهد بديل. استخدم NA فقط إذا كان المعيار غير منطبق فعلًا أو أن المعلومات اللازمة للحكم غير متاحة أو تعذر الحكم بعد محاولة استخراج شاهد صالح.
 12) strengths وissues وrecommendations وlimitations قوائم عربية موجزة ومحددة بالنص. لا تضف ادعاءات لم تُفحص.
 13) لا تحسب أي متوسطات أو درجات أبعاد أو نتيجة إجمالية؛ سيحسبها التطبيق آليًا.
 """
@@ -105,6 +107,63 @@ def _extract_json(text):
     if start < 0 or end < start:
         raise ValueError("لم يُرجع النموذج كائن JSON صالحًا.")
     return json.loads(text[start:end + 1])
+
+
+
+def _normalized_quote(value):
+    """Normalize whitespace only; do not alter words or punctuation."""
+    return " ".join(str(value or "").split())
+
+
+def _quote_is_verbatim(evidence, source_text):
+    quote = _normalized_quote(evidence)
+    source = _normalized_quote(source_text)
+    return bool(quote) and quote in source
+
+
+def _repair_invalid_evidence(client, model, source_text, data):
+    """Ask the model once to repair only evidence quotes that are not verbatim.
+
+    This is a bounded repair pass, not independent verification of the score.
+    """
+    indicators = data.get("indicators", {}) if isinstance(data, dict) else {}
+    invalid = []
+    for code, item in indicators.items():
+        if code in INDICATORS and isinstance(item, dict) and item.get("score") is not None:
+            if not _quote_is_verbatim(item.get("evidence", ""), source_text):
+                invalid.append(code)
+    if not invalid:
+        return data, []
+
+    repair_prompt = (
+        "أصلح حقول الشاهد فقط للمؤشرات التالية، ولا تغيّر الدرجة أو المبرر أو الثقة أو سبب NA. "
+        "لكل مؤشر أعد اقتباسًا حرفيًا متصلًا موجودًا في النص أدناه كما هو تمامًا، "
+        "من دون حذف أو إعادة صياغة أو علامات حذف. إذا لم يوجد شاهد مناسب، اجعل score=null، "
+        "واكتب سببًا واضحًا في rationale وna_reason='تعذر الحكم'. "
+        "أعد JSON فقط بالشكل {\"indicators\":{...}}.\n"
+        "المؤشرات المطلوب إصلاحها: " + json.dumps(invalid, ensure_ascii=False) + "\n"
+        "النص الأصلي بين العلامتين:\n<<<TEXT>>>\n" + source_text + "\n<<<END TEXT>>>\n"
+        "النتائج الحالية لهذه المؤشرات:\n" + json.dumps({k: indicators.get(k) for k in invalid}, ensure_ascii=False)
+    )
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=repair_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+            ),
+        )
+        repaired = _extract_json(response.text or "")
+        repaired_items = repaired.get("indicators", {}) if isinstance(repaired, dict) else {}
+        for code in invalid:
+            if isinstance(repaired_items.get(code), dict):
+                indicators[code] = repaired_items[code]
+        data["indicators"] = indicators
+        return data, invalid
+    except Exception:
+        # Keep the original data; strict validation below will safely mark invalid quotes.
+        return data, invalid
 
 
 def _validate_and_calculate(data, source_text):
@@ -134,7 +193,7 @@ def _validate_and_calculate(data, source_text):
 
         # A scored item must cite a literal excerpt from the submitted text.
         # If it does not, fail safely to NA rather than displaying fabricated evidence.
-        if score is not None and (not evidence or evidence not in source_text):
+        if score is not None and not _quote_is_verbatim(evidence, source_text):
             score = None
             evidence = "لم يُقدَّم شاهد حرفي قابل للتحقق داخل النص."
             rationale = "حُوّلت النتيجة إلى NA لأن الشاهد المقدم لا يطابق النص المدخل حرفيًا؛ يلزم إعادة التقييم أو المراجعة البشرية."
@@ -163,6 +222,7 @@ def _validate_and_calculate(data, source_text):
             "rationale": rationale or "لم يقدم النموذج تبريرًا محددًا.",
             "confidence": confidence,
             "na_reason": na_reason,
+            "evidence_status": "مطابق للنص" if score is not None else "لا يوجد شاهد رقمي معتمد",
         }
 
     dimensions = {}
@@ -192,7 +252,7 @@ def _validate_and_calculate(data, source_text):
 
     return {
         "framework": "IAQF",
-        "version": "2.1-demo",
+        "version": "2.2-demo",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
@@ -256,4 +316,12 @@ def evaluate_text(content: str):
         ),
     )
     data = _extract_json(response.text or "")
-    return _validate_and_calculate(data, content)
+    data, repaired_codes = _repair_invalid_evidence(client, model, content, data)
+    result = _validate_and_calculate(data, content)
+    result["version"] = "2.2-demo"
+    result["evidence_repair_attempted"] = repaired_codes
+    result["evidence_validation_note"] = (
+        "أُجريت محاولة واحدة لإصلاح الشواهد غير المطابقة قبل اعتماد النتائج. "
+        "مطابقة الاقتباس للنص لا تثبت وحدها صحة الدرجة أو كفاية الدليل العلمي."
+    )
+    return result
