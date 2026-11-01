@@ -64,6 +64,7 @@ if result:
     st.divider()
     st.header("تقرير التقييم")
     st.caption("النتائج آلية استرشادية؛ ينبغي مراجعتها بشريًا قبل استخدامها في قرارات بحثية أو نشرية.")
+    st.warning("حدود التحقق: هذا الإصدار يحلل النص والشواهد المقدمة فقط، ولا يجري تحققًا خارجيًا من المراجع أو الوقائع أو الأصالة أو بيانات سياق الإنتاج.")
 
     overall = result.get("overall_score")
     coverage = result.get("coverage", {})
@@ -97,6 +98,9 @@ if result:
             "الثقة": item.get("confidence", "—"),
             "سبب NA": item.get("na_reason") or "—",
             "مطابقة الشاهد": item.get("evidence_status", "—"),
+            "أساس الحكم": item.get("evidence_basis", "—"),
+            "التحقق الخارجي": "لم يُجرَ" if not item.get("external_verification", False) else "تم",
+            "ملاحظة التحقق": item.get("verification_note", "—"),
         })
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -124,7 +128,7 @@ if result:
 
     report = {
         "framework": "IAQF",
-        "version": result.get("version", "2.2-demo"),
+        "version": result.get("version", "2.3-demo"),
         "overall_score": overall,
         "dimensions": result.get("dimensions", {}),
         "coverage": coverage,
@@ -135,6 +139,8 @@ if result:
         "limitations": result.get("limitations", []),
         "evidence_repair_attempted": result.get("evidence_repair_attempted", []),
         "evidence_validation_note": result.get("evidence_validation_note", ""),
+        "external_verification_performed": result.get("external_verification_performed", False),
+        "verification_scope": result.get("verification_scope", ""),
     }
     st.download_button(
         "⬇️ تنزيل تقرير التقييم (JSON)",
