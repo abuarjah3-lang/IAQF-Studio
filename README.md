@@ -1,2 +1,30 @@
-# IAQF-Studio
-Integrated Arabic Content Quality Framework – AI-powered evaluation platform for Arabic digital content.
+# IAQF Studio
+
+منصة تجريبية لتقييم جودة المحتوى العربي المولّد بالذكاء الاصطناعي وفق إطار IAQF.
+
+## الملفات
+- `app.py`: واجهة Streamlit.
+- `iaqf_engine.py`: تعريف المؤشرات، استدعاء نموذج Gemini، والتحقق من النتائج وحساب الدرجات.
+- `requirements.txt`: الاعتماديات.
+
+## التشغيل محليًا
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## إعداد مفتاح Gemini
+أنشئ ملفًا محليًا باسم `.streamlit/secrets.toml`:
+```toml
+GEMINI_API_KEY = "ضع_مفتاحك_هنا"
+GEMINI_MODEL = "gemini-2.5-flash"
+```
+لا ترفع هذا الملف إلى GitHub. في Streamlit Community Cloud أضف القيم نفسها من إعدادات التطبيق > Secrets.
+
+## ملاحظات علمية
+- هذه نسخة Demo بحثية وليست أداة مقننة أو مثبتة الصدق والثبات.
+- تقييم النموذج آلي استرشادي ويحتاج مراجعة بشرية.
+- لا يوجد تحقق ويب مستقل من المراجع أو الادعاءات في هذه النسخة.
+- تُستخدم NA عندما لا يسمح النص وحده بالحكم.
+- تُحسب درجة البعد عند توفر 50% على الأقل من مؤشراته، وتحسب الدرجة الإجمالية فقط عند توفر درجات الأبعاد الأربعة كلها.
+- زر تحسين المحتوى غير مفعّل في هذه المرحلة.
