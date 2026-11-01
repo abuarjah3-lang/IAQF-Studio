@@ -173,8 +173,81 @@ def _repair_invalid_evidence(client, model, source_text, data):
         return data, invalid
 
 
-def _validate_and_calculate(data, source_text):
+def _audit_evidence_quality(client, model, source_text, data):
+    """Second-pass model audit of evidence relevance, sufficiency and score consistency.
+
+    Literal matching is checked deterministically elsewhere. This audit is an
+    automated review aid, not independent human or external verification.
+    """
     indicators = data.get("indicators", {}) if isinstance(data, dict) else {}
+    candidates = {}
+    for code, item in indicators.items():
+        if code in INDICATORS and isinstance(item, dict) and item.get("score") is not None:
+            candidates[code] = {
+                "indicator": INDICATORS[code]["name"],
+                "guidance": INDICATOR_GUIDANCE[code],
+                "score": item.get("score"),
+                "evidence": item.get("evidence", ""),
+                "rationale": item.get("rationale", ""),
+                "confidence": item.get("confidence", "منخفض"),
+            }
+    if not candidates:
+        return {}, {"attempted": False, "status": "لا توجد مؤشرات رقمية للمراجعة"}
+
+    audit_prompt = (
+        "أنت مدقق جودة أدلة مستقل عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
+        "من حيث: (1) صلة الاقتباس بالمؤشر تحديدًا، (2) كفاية الاقتباس والتبرير لدعم الدرجة "
+        "الممنوحة، (3) اتساق الدرجة مع الاقتباس والتبرير. لا تتحقق من صحة الوقائع خارجيًا. "
+        "لا تعتبر مجرد تطابق الاقتباس مع النص دليلًا على صلته أو كفايته. "
+        "استخدم verdict واحدة فقط: 'قوي' أو 'جزئي' أو 'غير مرتبط' أو 'متناقض'. "
+        "'جزئي' يعني أن الاقتباس ذو صلة لكنه لا يبرر تمامًا مستوى الدرجة. "
+        "'غير مرتبط' يعني أنه لا يدعم المؤشر. 'متناقض' يعني أن الدليل أو التبرير يناقض الدرجة. "
+        "أعد JSON فقط بهذا الشكل: {\"audits\":{\"L1\":{\"verdict\":\"قوي\","
+        "\"relevance\":\"...\",\"sufficiency\":\"...\",\"consistency\":\"...\","
+        "\"recommended_action\":\"اعتماد\"}}}. لا تغيّر الدرجة ولا تخترع شواهد.\n\n"
+        "تعريفات المؤشرات:\n" + json.dumps(INDICATOR_GUIDANCE, ensure_ascii=False)
+        + "\n\nالمؤشرات المراد تدقيقها:\n" + json.dumps(candidates, ensure_ascii=False)
+        + "\n\nالنص الأصلي:\n<<<TEXT>>>\n" + source_text + "\n<<<END TEXT>>>"
+    )
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=audit_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+            ),
+        )
+        parsed = _extract_json(response.text or "")
+        audits = parsed.get("audits", {}) if isinstance(parsed, dict) else {}
+        cleaned = {}
+        allowed = ("قوي", "جزئي", "غير مرتبط", "متناقض")
+        for code in candidates:
+            item = audits.get(code, {})
+            if not isinstance(item, dict):
+                item = {}
+            verdict = item.get("verdict")
+            if verdict not in allowed:
+                verdict = "تعذر التدقيق"
+            cleaned[code] = {
+                "verdict": verdict,
+                "relevance": str(item.get("relevance", "")).strip(),
+                "sufficiency": str(item.get("sufficiency", "")).strip(),
+                "consistency": str(item.get("consistency", "")).strip(),
+                "recommended_action": str(item.get("recommended_action", "")).strip(),
+            }
+        return cleaned, {"attempted": True, "status": "اكتمل التدقيق الآلي للأدلة"}
+    except Exception as exc:
+        return {}, {
+            "attempted": True,
+            "status": "تعذر إكمال التدقيق الآلي للأدلة",
+            "error": str(exc)[:300],
+        }
+
+
+def _validate_and_calculate(data, source_text, evidence_audits=None):
+    indicators = data.get("indicators", {}) if isinstance(data, dict) else {}
+    evidence_audits = evidence_audits or {}
     normalized = {}
     assessable = 0
     na_count = 0
@@ -228,14 +301,35 @@ def _validate_and_calculate(data, source_text):
         if evidence_basis not in allowed_bases:
             evidence_basis = "شاهد من النص" if score is not None else "غير متاح"
         verification_note = str(item.get("verification_note", "")).strip()
-        # This app version does not perform web/source verification. Never accept a model claim that it did.
+        audit = evidence_audits.get(code, {})
+        verdict = audit.get("verdict", "لم يُدقّق") if isinstance(audit, dict) else "لم يُدقّق"
+
+        # Conservative policy: an unrelated or contradictory quote cannot support a numeric score.
+        if score is not None and verdict in ("غير مرتبط", "متناقض"):
+            score = None
+            na_count += 1
+            assessable -= 1
+            dim_values[meta["dimension"]].pop()
+            na_reason = "تعذر الحكم"
+            confidence = "منخفض"
+            rationale = (
+                "لم يُعتمد الحكم الرقمي لأن مراجعة جودة الدليل وجدت أن الشاهد غير مرتبط بالمؤشر "
+                "أو غير متسق مع الدرجة. يلزم شاهد مناسب أو مراجعة بشرية."
+            )
+        elif score is not None and verdict == "جزئي" and confidence == "مرتفع":
+            confidence = "متوسط"
+
         normalized[code] = {
             "score": score,
             "evidence": evidence or "لا يوجد شاهد نصي كافٍ",
             "rationale": rationale or "لم يقدم النموذج تبريرًا محددًا.",
             "confidence": confidence,
             "na_reason": na_reason,
-            "evidence_status": "مطابق للنص" if score is not None else "لا يوجد شاهد رقمي معتمد",
+            "evidence_status": "مطابق حرفيًا" if _quote_is_verbatim(evidence, source_text) else "غير مطابق",
+            "evidence_relevance": audit.get("relevance", "") if isinstance(audit, dict) else "",
+            "evidence_sufficiency": audit.get("sufficiency", "") if isinstance(audit, dict) else "",
+            "score_consistency": audit.get("consistency", "") if isinstance(audit, dict) else "",
+            "evidence_quality_verdict": verdict,
             "evidence_basis": evidence_basis,
             "external_verification": False,
             "verification_note": verification_note or "لم يُجرَ تحقق خارجي مستقل في هذا الإصدار.",
@@ -268,7 +362,7 @@ def _validate_and_calculate(data, source_text):
 
     return {
         "framework": "IAQF",
-        "version": "2.3-demo",
+        "version": "2.4-demo",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
@@ -337,14 +431,34 @@ def evaluate_text(content: str):
         ),
     )
     data = _extract_json(response.text or "")
-    data, repaired_codes = _repair_invalid_evidence(client, model, content, data)
-    result = _validate_and_calculate(data, content)
-    result["version"] = "2.3-demo"
+    data, repair_attempted = _repair_invalid_evidence(client, model, content, data)
+
+    indicators_after_repair = data.get("indicators", {}) if isinstance(data, dict) else {}
+    repair_succeeded = [
+        code for code in repair_attempted
+        if isinstance(indicators_after_repair.get(code), dict)
+        and _quote_is_verbatim(indicators_after_repair[code].get("evidence", ""), content)
+    ]
+    repair_failed = [code for code in repair_attempted if code not in repair_succeeded]
+
+    evidence_audits, audit_meta = _audit_evidence_quality(client, model, content, data)
+    result = _validate_and_calculate(data, content, evidence_audits)
+    result["version"] = "2.4-demo"
     result["external_verification_performed"] = False
-    result["verification_scope"] = "تحليل النص والشواهد المقدمة فقط؛ لا يتضمن بحثًا خارجيًا أو فحصًا للمصادر الأصلية أو كشفًا مستقلًا للانتحال."
-    result["evidence_repair_attempted"] = repaired_codes
+    result["verification_scope"] = (
+        "تحليل النص والشواهد المقدمة ومراجعة آلية داخلية لصلتها وكفايتها واتساقها؛ "
+        "لا يتضمن بحثًا خارجيًا أو فحصًا للمصادر الأصلية أو كشفًا مستقلًا للانتحال."
+    )
+    result["evidence_repair"] = {
+        "attempted": repair_attempted,
+        "succeeded": repair_succeeded,
+        "failed": repair_failed,
+    }
+    result["evidence_repair_attempted"] = repair_attempted
+    result["evidence_audit"] = audit_meta
     result["evidence_validation_note"] = (
-        "أُجريت محاولة واحدة لإصلاح الشواهد غير المطابقة قبل اعتماد النتائج. "
-        "مطابقة الاقتباس للنص لا تثبت وحدها صحة الدرجة أو كفاية الدليل العلمي."
+        "تُفحص مطابقة الاقتباس حرفيًا برمجيًا، ثم تُراجع صلته بالمؤشر وكفايته واتساقه مع الدرجة "
+        "بمراجعة آلية ثانية. هذه المراجعة ليست تحققًا بشريًا أو خارجيًا، وقد تخطئ؛ راجع الحالات "
+        "الجزئية أو غير المدققة قبل اعتماد النتائج."
     )
     return result

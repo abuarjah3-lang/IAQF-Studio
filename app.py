@@ -64,7 +64,7 @@ if result:
     st.divider()
     st.header("تقرير التقييم")
     st.caption("النتائج آلية استرشادية؛ ينبغي مراجعتها بشريًا قبل استخدامها في قرارات بحثية أو نشرية.")
-    st.warning("حدود التحقق: هذا الإصدار يحلل النص والشواهد المقدمة فقط، ولا يجري تحققًا خارجيًا من المراجع أو الوقائع أو الأصالة أو بيانات سياق الإنتاج.")
+    st.warning("حدود التحقق: مراجعة صلة الأدلة وكفايتها واتساقها آلية وليست مراجعة بشرية مستقلة؛ ولا يجري التطبيق تحققًا خارجيًا من المراجع أو الوقائع أو الأصالة أو بيانات سياق الإنتاج.")
 
     overall = result.get("overall_score")
     coverage = result.get("coverage", {})
@@ -100,13 +100,23 @@ if result:
             "مطابقة الشاهد": item.get("evidence_status", "—"),
             "أساس الحكم": item.get("evidence_basis", "—"),
             "التحقق الخارجي": "لم يُجرَ" if not item.get("external_verification", False) else "تم",
+            "صلة الشاهد": item.get("evidence_relevance", "—"),
+            "كفاية الشاهد": item.get("evidence_sufficiency", "—"),
+            "اتساق الدرجة": item.get("score_consistency", "—"),
+            "حكم جودة الدليل": item.get("evidence_quality_verdict", "—"),
             "ملاحظة التحقق": item.get("verification_note", "—"),
         })
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    if result.get("evidence_repair_attempted"):
-        st.info("أُعيدت محاولة استخراج الشاهد للمؤشرات: " + ", ".join(result["evidence_repair_attempted"]))
+    repair = result.get("evidence_repair", {})
+    if repair.get("attempted"):
+        st.info("محاولات إصلاح الشواهد: " + ", ".join(repair.get("attempted", [])))
+        st.caption("نجح الإصلاح: " + (", ".join(repair.get("succeeded", [])) or "لا يوجد")
+                   + " | لم ينجح: " + (", ".join(repair.get("failed", [])) or "لا يوجد"))
+    audit_meta = result.get("evidence_audit", {})
+    if audit_meta:
+        st.caption("حالة مراجعة جودة الأدلة: " + audit_meta.get("status", "غير محددة"))
     if result.get("evidence_validation_note"):
         st.caption(result["evidence_validation_note"])
 
@@ -128,7 +138,7 @@ if result:
 
     report = {
         "framework": "IAQF",
-        "version": result.get("version", "2.3-demo"),
+        "version": result.get("version", "2.4-demo"),
         "overall_score": overall,
         "dimensions": result.get("dimensions", {}),
         "coverage": coverage,
@@ -138,6 +148,8 @@ if result:
         "recommendations": result.get("recommendations", []),
         "limitations": result.get("limitations", []),
         "evidence_repair_attempted": result.get("evidence_repair_attempted", []),
+        "evidence_repair": result.get("evidence_repair", {}),
+        "evidence_audit": result.get("evidence_audit", {}),
         "evidence_validation_note": result.get("evidence_validation_note", ""),
         "external_verification_performed": result.get("external_verification_performed", False),
         "verification_scope": result.get("verification_scope", ""),
