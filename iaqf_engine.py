@@ -195,7 +195,7 @@ def _audit_evidence_quality(client, model, source_text, data):
         return {}, {"attempted": False, "status": "لا توجد مؤشرات رقمية للمراجعة"}
 
     audit_prompt = (
-        "أنت مدقق جودة أدلة مستقل عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
+        "أنت مدقق جودة أدلة في مرحلة آلية ثانية منفصلة عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
         "من حيث: (1) صلة الاقتباس بالمؤشر تحديدًا، (2) كفاية الاقتباس والتبرير لدعم الدرجة "
         "الممنوحة، (3) اتساق الدرجة مع الاقتباس والتبرير. لا تتحقق من صحة الوقائع خارجيًا. "
         "لا تعتبر مجرد تطابق الاقتباس مع النص دليلًا على صلته أو كفايته. "
@@ -204,7 +204,12 @@ def _audit_evidence_quality(client, model, source_text, data):
         "'غير مرتبط' يعني أنه لا يدعم المؤشر. 'متناقض' يعني أن الدليل أو التبرير يناقض الدرجة. "
         "أعد JSON فقط بهذا الشكل: {\"audits\":{\"L1\":{\"verdict\":\"قوي\","
         "\"relevance\":\"...\",\"sufficiency\":\"...\",\"consistency\":\"...\","
-        "\"recommended_action\":\"اعتماد\"}}}. لا تغيّر الدرجة ولا تخترع شواهد.\n\n"
+        "\"recommended_action\":\"خفض الدرجة\"}}}. "
+        "calibrated_score يجب أن يكون عددًا صحيحًا من 1 إلى الدرجة الأصلية، أو null إذا تعذر الحكم. "
+        "لا ترفع الدرجة مطلقًا. عند verdict='جزئي' لا تتجاوز الدرجة المعايرة 4، "
+        "واختر الدرجة وفق مقدار ما يثبته الشاهد فعلًا لا وفق خصم آلي ثابت. "
+        "عند verdict='قوي' يجوز إبقاء الدرجة أو خفضها إذا كان الشاهد لا يبرر الدرجة الأصلية. "
+        "عند 'غير مرتبط' أو 'متناقض' اجعل calibrated_score=null. لا تخترع شواهد.\n\n"
         "تعريفات المؤشرات:\n" + json.dumps(INDICATOR_GUIDANCE, ensure_ascii=False)
         + "\n\nالمؤشرات المراد تدقيقها:\n" + json.dumps(candidates, ensure_ascii=False)
         + "\n\nالنص الأصلي:\n<<<TEXT>>>\n" + source_text + "\n<<<END TEXT>>>"
@@ -235,6 +240,8 @@ def _audit_evidence_quality(client, model, source_text, data):
                 "sufficiency": str(item.get("sufficiency", "")).strip(),
                 "consistency": str(item.get("consistency", "")).strip(),
                 "recommended_action": str(item.get("recommended_action", "")).strip(),
+                "calibrated_score": item.get("calibrated_score"),
+                "calibration_reason": str(item.get("calibration_reason", "")).strip(),
             }
         return cleaned, {"attempted": True, "status": "اكتمل التدقيق الآلي للأدلة"}
     except Exception as exc:
@@ -280,22 +287,6 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             na_reason = "تعذر الحكم"
             confidence = "منخفض"
 
-        if score is None:
-            na_count += 1
-            if na_reason not in ("غير منطبق", "نقص سياق", "تعذر الحكم"):
-                na_reason = "تعذر الحكم"
-        else:
-            assessable += 1
-            na_reason = None
-            dim_values[meta["dimension"]].append(score)
-            if not evidence:
-                # Defensive fallback; normally caught by literal-evidence validation above.
-                score = None
-                assessable -= 1
-                na_count += 1
-                dim_values[meta["dimension"]].pop()
-                na_reason = "تعذر الحكم"
-
         evidence_basis = item.get("evidence_basis", "شاهد من النص" if score is not None else "غير متاح")
         allowed_bases = ("شاهد من النص", "بيانات سياقية مقدمة", "تحليل استدلالي", "يتطلب تحققًا خارجيًا", "غير متاح")
         if evidence_basis not in allowed_bases:
@@ -304,23 +295,75 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
         audit = evidence_audits.get(code, {})
         verdict = audit.get("verdict", "لم يُدقّق") if isinstance(audit, dict) else "لم يُدقّق"
 
-        # Conservative policy: an unrelated or contradictory quote cannot support a numeric score.
+        original_score = score
+        calibrated_score = score
+        score_adjusted = False
+        calibration_reason = ""
+
+        # Apply audit calibration before counting scores or calculating dimensions.
         if score is not None and verdict in ("غير مرتبط", "متناقض"):
-            score = None
-            na_count += 1
-            assessable -= 1
-            dim_values[meta["dimension"]].pop()
-            na_reason = "تعذر الحكم"
-            confidence = "منخفض"
-            rationale = (
-                "لم يُعتمد الحكم الرقمي لأن مراجعة جودة الدليل وجدت أن الشاهد غير مرتبط بالمؤشر "
-                "أو غير متسق مع الدرجة. يلزم شاهد مناسب أو مراجعة بشرية."
+            calibrated_score = None
+            calibration_reason = (
+                "حُوّلت الدرجة إلى NA لأن التدقيق الآلي وجد أن الشاهد غير مرتبط بالمؤشر "
+                "أو متناقض مع الحكم؛ يلزم شاهد مناسب أو مراجعة بشرية."
             )
-        elif score is not None and verdict == "جزئي" and confidence == "مرتفع":
+        elif score is not None and verdict in ("قوي", "جزئي"):
+            proposed = audit.get("calibrated_score") if isinstance(audit, dict) else None
+            valid_proposal = (
+                isinstance(proposed, int) and not isinstance(proposed, bool)
+                and 1 <= proposed <= original_score
+            )
+            if valid_proposal:
+                calibrated_score = proposed
+            elif verdict == "جزئي":
+                calibrated_score = min(original_score, 4)
+            else:
+                calibrated_score = original_score
+
+            if verdict == "جزئي":
+                calibrated_score = min(calibrated_score, 4)
+            if calibrated_score < original_score:
+                calibration_reason = str(audit.get("calibration_reason", "")).strip() or (
+                    "خُفّضت الدرجة لأن الشاهد يدعم المؤشر جزئيًا ولا يكفي لتبرير الدرجة الأصلية."
+                )
+            elif verdict == "جزئي":
+                calibration_reason = str(audit.get("calibration_reason", "")).strip() or (
+                    "الشاهد جزئي؛ لم يوصِ التدقيق بدرجة أقل، مع تطبيق سقف 4 لهذا الحكم."
+                )
+            else:
+                calibration_reason = str(audit.get("calibration_reason", "")).strip() or (
+                    "لم يظهر في التدقيق سبب كافٍ لخفض الدرجة."
+                )
+
+        score = calibrated_score
+        score_adjusted = score != original_score
+
+        if score is None:
+            na_count += 1
+            if na_reason not in ("غير منطبق", "نقص سياق", "تعذر الحكم"):
+                na_reason = "تعذر الحكم"
+            if verdict in ("غير مرتبط", "متناقض"):
+                confidence = "منخفض"
+        else:
+            if not evidence:
+                score = None
+                calibrated_score = None
+                na_count += 1
+                na_reason = "تعذر الحكم"
+                score_adjusted = True
+            else:
+                assessable += 1
+                na_reason = None
+                dim_values[meta["dimension"]].append(score)
+
+        if verdict == "جزئي" and confidence == "مرتفع":
             confidence = "متوسط"
 
         normalized[code] = {
             "score": score,
+            "original_score": original_score,
+            "score_adjusted": score_adjusted,
+            "calibration_reason": calibration_reason,
             "evidence": evidence or "لا يوجد شاهد نصي كافٍ",
             "rationale": rationale or "لم يقدم النموذج تبريرًا محددًا.",
             "confidence": confidence,
@@ -362,7 +405,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
 
     return {
         "framework": "IAQF",
-        "version": "2.4-demo",
+        "version": "2.4.1-demo",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
@@ -443,7 +486,7 @@ def evaluate_text(content: str):
 
     evidence_audits, audit_meta = _audit_evidence_quality(client, model, content, data)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.4-demo"
+    result["version"] = "2.4.1-demo"
     result["external_verification_performed"] = False
     result["verification_scope"] = (
         "تحليل النص والشواهد المقدمة ومراجعة آلية داخلية لصلتها وكفايتها واتساقها؛ "

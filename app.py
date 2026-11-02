@@ -92,7 +92,10 @@ if result:
         rows.append({
             "الرمز": key,
             "المؤشر": meta["name"],
-            "الدرجة": item.get("score", "NA"),
+            "الدرجة الأصلية": item.get("original_score", item.get("score", "NA")),
+            "الدرجة المعايرة": item.get("score", "NA"),
+            "عُدّلت الدرجة؟": "نعم" if item.get("score_adjusted") else "لا",
+            "سبب المعايرة": item.get("calibration_reason", ""),
             "الشاهد من النص": item.get("evidence", ""),
             "التبرير": item.get("rationale", ""),
             "الثقة": item.get("confidence", "—"),
@@ -138,11 +141,21 @@ if result:
 
     report = {
         "framework": "IAQF",
-        "version": result.get("version", "2.4-demo"),
+        "version": result.get("version", "2.4.1-demo"),
         "overall_score": overall,
         "dimensions": result.get("dimensions", {}),
         "coverage": coverage,
         "indicators": result.get("indicators", {}),
+        "score_calibration": {
+            "adjusted": sum(1 for x in result.get("indicators", {}).values() if x.get("score_adjusted")),
+            "reduced": sum(1 for x in result.get("indicators", {}).values()
+                           if isinstance(x.get("original_score"), int)
+                           and isinstance(x.get("score"), int)
+                           and x.get("score") < x.get("original_score")),
+            "converted_to_NA": sum(1 for x in result.get("indicators", {}).values()
+                                   if isinstance(x.get("original_score"), int) and x.get("score") is None),
+            "method": "مراجعة آلية ثانية؛ لا تمثل تحققًا بشريًا أو خارجيًا."
+        },
         "strengths": result.get("strengths", []),
         "issues": result.get("issues", []),
         "recommendations": result.get("recommendations", []),
