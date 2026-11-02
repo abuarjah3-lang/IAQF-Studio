@@ -195,21 +195,21 @@ def _audit_evidence_quality(client, model, source_text, data):
         return {}, {"attempted": False, "status": "لا توجد مؤشرات رقمية للمراجعة"}
 
     audit_prompt = (
-        "أنت مدقق جودة أدلة في مرحلة آلية ثانية منفصلة عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
+        "أنت مدقق جودة أدلة مستقل عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
         "من حيث: (1) صلة الاقتباس بالمؤشر تحديدًا، (2) كفاية الاقتباس والتبرير لدعم الدرجة "
         "الممنوحة، (3) اتساق الدرجة مع الاقتباس والتبرير. لا تتحقق من صحة الوقائع خارجيًا. "
         "لا تعتبر مجرد تطابق الاقتباس مع النص دليلًا على صلته أو كفايته. "
         "استخدم verdict واحدة فقط: 'قوي' أو 'جزئي' أو 'غير مرتبط' أو 'متناقض'. "
         "'جزئي' يعني أن الاقتباس ذو صلة لكنه لا يبرر تمامًا مستوى الدرجة. "
         "'غير مرتبط' يعني أنه لا يدعم المؤشر. 'متناقض' يعني أن الدليل أو التبرير يناقض الدرجة. "
+        "لكل مؤشر أعد calibrated_score كعدد صحيح من 1 إلى 5 أو null، وcalibration_reason يشرح القرار. "
+        "لا يجوز أن تتجاوز calibrated_score الدرجة الأصلية مطلقًا. إذا كان verdict='جزئي' فلا تتجاوز 4، "
+        "واختر الدرجة التي يبررها الشاهد فعلًا. إذا كان verdict='قوي' يجوز إبقاء الدرجة أو خفضها فقط. "
+        "إذا كان verdict='غير مرتبط' أو 'متناقض' فاجعل calibrated_score=null. "
         "أعد JSON فقط بهذا الشكل: {\"audits\":{\"L1\":{\"verdict\":\"قوي\","
-        "\"relevance\":\"...\",\"sufficiency\":\"...\",\"consistency\":\"...\","
-        "\"recommended_action\":\"خفض الدرجة\"}}}. "
-        "calibrated_score يجب أن يكون عددًا صحيحًا من 1 إلى الدرجة الأصلية، أو null إذا تعذر الحكم. "
-        "لا ترفع الدرجة مطلقًا. عند verdict='جزئي' لا تتجاوز الدرجة المعايرة 4، "
-        "واختر الدرجة وفق مقدار ما يثبته الشاهد فعلًا لا وفق خصم آلي ثابت. "
-        "عند verdict='قوي' يجوز إبقاء الدرجة أو خفضها إذا كان الشاهد لا يبرر الدرجة الأصلية. "
-        "عند 'غير مرتبط' أو 'متناقض' اجعل calibrated_score=null. لا تخترع شواهد.\n\n"
+        "\"calibrated_score\":4,\"calibration_reason\":\"...\","
+        "\"relevance\":\"...\",\"sufficiency\":\"...\",\"consistency\":\"...\"}}}. "
+        "لا تخترع شواهد ولا ترفع أي درجة.\n\n"
         "تعريفات المؤشرات:\n" + json.dumps(INDICATOR_GUIDANCE, ensure_ascii=False)
         + "\n\nالمؤشرات المراد تدقيقها:\n" + json.dumps(candidates, ensure_ascii=False)
         + "\n\nالنص الأصلي:\n<<<TEXT>>>\n" + source_text + "\n<<<END TEXT>>>"
@@ -243,7 +243,9 @@ def _audit_evidence_quality(client, model, source_text, data):
                 "calibrated_score": item.get("calibrated_score"),
                 "calibration_reason": str(item.get("calibration_reason", "")).strip(),
             }
-        return cleaned, {"attempted": True, "status": "اكتمل التدقيق الآلي للأدلة"}
+        missing = [code for code, audit in cleaned.items() if audit["verdict"] == "تعذر التدقيق"]
+        status = "اكتمل التدقيق الآلي للأدلة" if not missing else "اكتمل جزئيًا؛ بعض المؤشرات لم تُدقّق"
+        return cleaned, {"attempted": True, "status": status, "und_audited": missing}
     except Exception as exc:
         return {}, {
             "attempted": True,
@@ -287,6 +289,22 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             na_reason = "تعذر الحكم"
             confidence = "منخفض"
 
+        if score is None:
+            na_count += 1
+            if na_reason not in ("غير منطبق", "نقص سياق", "تعذر الحكم"):
+                na_reason = "تعذر الحكم"
+        else:
+            assessable += 1
+            na_reason = None
+            dim_values[meta["dimension"]].append(score)
+            if not evidence:
+                # Defensive fallback; normally caught by literal-evidence validation above.
+                score = None
+                assessable -= 1
+                na_count += 1
+                dim_values[meta["dimension"]].pop()
+                na_reason = "تعذر الحكم"
+
         evidence_basis = item.get("evidence_basis", "شاهد من النص" if score is not None else "غير متاح")
         allowed_bases = ("شاهد من النص", "بيانات سياقية مقدمة", "تحليل استدلالي", "يتطلب تحققًا خارجيًا", "غير متاح")
         if evidence_basis not in allowed_bases:
@@ -295,73 +313,52 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
         audit = evidence_audits.get(code, {})
         verdict = audit.get("verdict", "لم يُدقّق") if isinstance(audit, dict) else "لم يُدقّق"
 
+        # Calibrate only when the second-pass audit actually returned a valid verdict.
         original_score = score
-        calibrated_score = score
+        calibrated_score = None
+        calibration_reason = "لم تُجرَ المعايرة؛ احتُفظ بالدرجة الأولية دون اعتمادها كدرجة معايرة."
         score_adjusted = False
-        calibration_reason = ""
-
-        # Apply audit calibration before counting scores or calculating dimensions.
         if score is not None and verdict in ("غير مرتبط", "متناقض"):
             calibrated_score = None
-            calibration_reason = (
-                "حُوّلت الدرجة إلى NA لأن التدقيق الآلي وجد أن الشاهد غير مرتبط بالمؤشر "
-                "أو متناقض مع الحكم؛ يلزم شاهد مناسب أو مراجعة بشرية."
+            calibration_reason = audit.get("calibration_reason") or (
+                "لم يُعتمد الحكم الرقمي لأن الشاهد غير مرتبط بالمؤشر أو متناقض مع الدرجة."
             )
+            na_count += 1
+            assessable -= 1
+            if dim_values[meta["dimension"]]:
+                dim_values[meta["dimension"]].pop()
+            na_reason = "تعذر الحكم"
+            confidence = "منخفض"
+            rationale = calibration_reason
+            score = None
+            score_adjusted = True
         elif score is not None and verdict in ("قوي", "جزئي"):
-            proposed = audit.get("calibrated_score") if isinstance(audit, dict) else None
-            valid_proposal = (
-                isinstance(proposed, int) and not isinstance(proposed, bool)
-                and 1 <= proposed <= original_score
-            )
-            if valid_proposal:
-                calibrated_score = proposed
-            elif verdict == "جزئي":
-                calibrated_score = min(original_score, 4)
-            else:
-                calibrated_score = original_score
-
+            proposed = audit.get("calibrated_score")
+            if isinstance(proposed, bool) or not isinstance(proposed, int) or not 1 <= proposed <= 5:
+                proposed = original_score
+            # Hard safety caps: calibration can never raise a score; partial evidence is capped at 4.
+            calibrated_score = min(original_score, proposed)
             if verdict == "جزئي":
                 calibrated_score = min(calibrated_score, 4)
-            if calibrated_score < original_score:
-                calibration_reason = str(audit.get("calibration_reason", "")).strip() or (
-                    "خُفّضت الدرجة لأن الشاهد يدعم المؤشر جزئيًا ولا يكفي لتبرير الدرجة الأصلية."
-                )
-            elif verdict == "جزئي":
-                calibration_reason = str(audit.get("calibration_reason", "")).strip() or (
-                    "الشاهد جزئي؛ لم يوصِ التدقيق بدرجة أقل، مع تطبيق سقف 4 لهذا الحكم."
-                )
-            else:
-                calibration_reason = str(audit.get("calibration_reason", "")).strip() or (
-                    "لم يظهر في التدقيق سبب كافٍ لخفض الدرجة."
-                )
-
-        score = calibrated_score
-        score_adjusted = score != original_score
-
-        if score is None:
-            na_count += 1
-            if na_reason not in ("غير منطبق", "نقص سياق", "تعذر الحكم"):
-                na_reason = "تعذر الحكم"
-            if verdict in ("غير مرتبط", "متناقض"):
-                confidence = "منخفض"
-        else:
-            if not evidence:
-                score = None
-                calibrated_score = None
-                na_count += 1
-                na_reason = "تعذر الحكم"
-                score_adjusted = True
-            else:
-                assessable += 1
-                na_reason = None
-                dim_values[meta["dimension"]].append(score)
-
-        if verdict == "جزئي" and confidence == "مرتفع":
-            confidence = "متوسط"
+                if confidence == "مرتفع":
+                    confidence = "متوسط"
+            calibration_reason = audit.get("calibration_reason") or (
+                "الدرجة أُبقيت بعد مراجعة الدليل." if calibrated_score == original_score
+                else "خُفّضت الدرجة لتتناسب مع قوة الشاهد والتبرير."
+            )
+            score = calibrated_score
+            score_adjusted = score != original_score
+            # Replace the original value already included in the dimension accumulator.
+            if dim_values[meta["dimension"]]:
+                dim_values[meta["dimension"]][-1] = score
+        elif score is not None:
+            calibrated_score = None
+            calibration_reason = "تعذر التدقيق؛ بقيت الدرجة الأولية ظاهرة وغير معايرة."
 
         normalized[code] = {
             "score": score,
             "original_score": original_score,
+            "calibrated_score": calibrated_score,
             "score_adjusted": score_adjusted,
             "calibration_reason": calibration_reason,
             "evidence": evidence or "لا يوجد شاهد نصي كافٍ",
@@ -499,6 +496,14 @@ def evaluate_text(content: str):
     }
     result["evidence_repair_attempted"] = repair_attempted
     result["evidence_audit"] = audit_meta
+    calibrated_items = [x for x in result.get("indicators", {}).values() if x.get("original_score") is not None]
+    result["score_calibration"] = {
+        "status": "اكتملت المعايرة" if audit_meta.get("status") == "اكتمل التدقيق الآلي للأدلة" and not audit_meta.get("error") else "لم تكتمل المعايرة بالكامل",
+        "adjusted": sum(1 for x in calibrated_items if x.get("score_adjusted") and x.get("calibrated_score") is not None),
+        "reduced": sum(1 for x in calibrated_items if x.get("score_adjusted") and x.get("calibrated_score") is not None and x.get("calibrated_score") < x.get("original_score")),
+        "converted_to_NA": sum(1 for x in result.get("indicators", {}).values() if x.get("original_score") is not None and x.get("score") is None),
+        "not_a_human_or_external_validation": True,
+    }
     result["evidence_validation_note"] = (
         "تُفحص مطابقة الاقتباس حرفيًا برمجيًا، ثم تُراجع صلته بالمؤشر وكفايته واتساقه مع الدرجة "
         "بمراجعة آلية ثانية. هذه المراجعة ليست تحققًا بشريًا أو خارجيًا، وقد تخطئ؛ راجع الحالات "

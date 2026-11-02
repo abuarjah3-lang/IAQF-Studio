@@ -93,9 +93,9 @@ if result:
             "الرمز": key,
             "المؤشر": meta["name"],
             "الدرجة الأصلية": item.get("original_score", item.get("score", "NA")),
-            "الدرجة المعايرة": item.get("score", "NA"),
-            "عُدّلت الدرجة؟": "نعم" if item.get("score_adjusted") else "لا",
-            "سبب المعايرة": item.get("calibration_reason", ""),
+            "الدرجة المعايرة": (item.get("calibrated_score") if item.get("calibrated_score") is not None else ("لم تتم المعايرة" if item.get("original_score") is not None else "NA")),
+            "حالة التعديل": ("عُدّلت" if item.get("score_adjusted") else ("لم تتم المعايرة" if item.get("original_score") is not None and item.get("calibrated_score") is None else "دون تعديل")),
+            "سبب المعايرة": item.get("calibration_reason", "—"),
             "الشاهد من النص": item.get("evidence", ""),
             "التبرير": item.get("rationale", ""),
             "الثقة": item.get("confidence", "—"),
@@ -146,16 +146,6 @@ if result:
         "dimensions": result.get("dimensions", {}),
         "coverage": coverage,
         "indicators": result.get("indicators", {}),
-        "score_calibration": {
-            "adjusted": sum(1 for x in result.get("indicators", {}).values() if x.get("score_adjusted")),
-            "reduced": sum(1 for x in result.get("indicators", {}).values()
-                           if isinstance(x.get("original_score"), int)
-                           and isinstance(x.get("score"), int)
-                           and x.get("score") < x.get("original_score")),
-            "converted_to_NA": sum(1 for x in result.get("indicators", {}).values()
-                                   if isinstance(x.get("original_score"), int) and x.get("score") is None),
-            "method": "مراجعة آلية ثانية؛ لا تمثل تحققًا بشريًا أو خارجيًا."
-        },
         "strengths": result.get("strengths", []),
         "issues": result.get("issues", []),
         "recommendations": result.get("recommendations", []),
@@ -163,6 +153,7 @@ if result:
         "evidence_repair_attempted": result.get("evidence_repair_attempted", []),
         "evidence_repair": result.get("evidence_repair", {}),
         "evidence_audit": result.get("evidence_audit", {}),
+        "score_calibration": result.get("score_calibration", {}),
         "evidence_validation_note": result.get("evidence_validation_note", ""),
         "external_verification_performed": result.get("external_verification_performed", False),
         "verification_scope": result.get("verification_scope", ""),
