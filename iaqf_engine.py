@@ -361,6 +361,10 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             "calibrated_score": calibrated_score,
             "score_adjusted": score_adjusted,
             "calibration_reason": calibration_reason,
+            "calibration_status": (
+                "اكتملت" if verdict in ("قوي", "جزئي", "غير مرتبط", "متناقض")
+                else ("لم تُعايَر" if original_score is not None else "غير منطبق")
+            ),
             "evidence": evidence or "لا يوجد شاهد نصي كافٍ",
             "rationale": rationale or "لم يقدم النموذج تبريرًا محددًا.",
             "confidence": confidence,
@@ -402,7 +406,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
 
     return {
         "framework": "IAQF",
-        "version": "2.4.1-demo",
+        "version": "2.4.1.1-demo",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
@@ -483,7 +487,7 @@ def evaluate_text(content: str):
 
     evidence_audits, audit_meta = _audit_evidence_quality(client, model, content, data)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.4.1-demo"
+    result["version"] = "2.4.1.1-demo"
     result["external_verification_performed"] = False
     result["verification_scope"] = (
         "تحليل النص والشواهد المقدمة ومراجعة آلية داخلية لصلتها وكفايتها واتساقها؛ "
@@ -499,6 +503,8 @@ def evaluate_text(content: str):
     calibrated_items = [x for x in result.get("indicators", {}).values() if x.get("original_score") is not None]
     result["score_calibration"] = {
         "status": "اكتملت المعايرة" if audit_meta.get("status") == "اكتمل التدقيق الآلي للأدلة" and not audit_meta.get("error") else "لم تكتمل المعايرة بالكامل",
+        "audited": sum(1 for x in calibrated_items if x.get("calibration_status") == "اكتملت"),
+        "not_calibrated": sum(1 for x in calibrated_items if x.get("calibration_status") == "لم تُعايَر"),
         "adjusted": sum(1 for x in calibrated_items if x.get("score_adjusted") and x.get("calibrated_score") is not None),
         "reduced": sum(1 for x in calibrated_items if x.get("score_adjusted") and x.get("calibrated_score") is not None and x.get("calibrated_score") < x.get("original_score")),
         "converted_to_NA": sum(1 for x in result.get("indicators", {}).values() if x.get("original_score") is not None and x.get("score") is None),

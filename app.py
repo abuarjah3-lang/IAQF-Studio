@@ -38,8 +38,16 @@ content = st.text_area(
 )
 st.caption("لا يحتاج المستخدم إلى إدخال درجات أو شواهد أو بيانات إضافية.")
 
+APP_VERSION = "2.4.1.1-demo"
+
 if "evaluation_result" not in st.session_state:
     st.session_state.evaluation_result = None
+
+# Do not display a cached report created by an older code version after deployment.
+cached_result = st.session_state.evaluation_result
+if cached_result and cached_result.get("version") != APP_VERSION:
+    st.session_state.evaluation_result = None
+    st.info("تم تحديث المنصة إلى إصدار جديد؛ أُخفي التقرير السابق لتجنب عرض نتائج قديمة بصيغة مضللة. أعد التقييم عند توافر الخدمة.")
 
 col1, col2 = st.columns([1, 1])
 with col1:
@@ -54,6 +62,7 @@ if run_eval:
         try:
             with st.spinner("يجري تحليل النص وتقييم مؤشرات IAQF الـ27..."):
                 st.session_state.evaluation_result = evaluate_text(content.strip())
+                st.session_state.evaluation_result["version"] = APP_VERSION
         except Exception as exc:
             st.error(f"تعذر إكمال التقييم: {exc}")
             st.info("تحقق من إعداد مفتاح Gemini في Streamlit Secrets، ومن حدود الاستخدام المتاحة.")
@@ -63,6 +72,7 @@ result = st.session_state.evaluation_result
 if result:
     st.divider()
     st.header("تقرير التقييم")
+    st.caption(f"إصدار المحرك: {result.get('version', 'غير محدد')} | إصدار الواجهة: {APP_VERSION}")
     st.caption("النتائج آلية استرشادية؛ ينبغي مراجعتها بشريًا قبل استخدامها في قرارات بحثية أو نشرية.")
     st.warning("حدود التحقق: مراجعة صلة الأدلة وكفايتها واتساقها آلية وليست مراجعة بشرية مستقلة؛ ولا يجري التطبيق تحققًا خارجيًا من المراجع أو الوقائع أو الأصالة أو بيانات سياق الإنتاج.")
 
@@ -118,8 +128,22 @@ if result:
         st.caption("نجح الإصلاح: " + (", ".join(repair.get("succeeded", [])) or "لا يوجد")
                    + " | لم ينجح: " + (", ".join(repair.get("failed", [])) or "لا يوجد"))
     audit_meta = result.get("evidence_audit", {})
+    calibration_meta = result.get("score_calibration", {})
     if audit_meta:
         st.caption("حالة مراجعة جودة الأدلة: " + audit_meta.get("status", "غير محددة"))
+    calibration_status = calibration_meta.get("status", "لم تُسجّل حالة المعايرة")
+    if calibration_status == "اكتملت المعايرة":
+        st.success("حالة المعايرة: اكتملت المراجعة الآلية الثانية للمؤشرات التي أمكن تدقيقها.")
+    else:
+        st.error("حالة المعايرة: لم تكتمل. الدرجات الأصلية ظاهرة للشفافية، لكنها ليست درجات معايرة ولا ينبغي اعتمادها بوصفها كذلك.")
+        if audit_meta.get("error"):
+            st.caption("تفاصيل تعذّر التدقيق: " + str(audit_meta.get("error"))[:300])
+    st.caption(
+        "ملخص المعايرة — خُفّضت: "
+        + str(calibration_meta.get("reduced", 0))
+        + " | حُوّلت إلى NA: "
+        + str(calibration_meta.get("converted_to_NA", 0))
+    )
     if result.get("evidence_validation_note"):
         st.caption(result["evidence_validation_note"])
 
