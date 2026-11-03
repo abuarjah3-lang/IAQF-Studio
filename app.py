@@ -33,97 +33,89 @@ def load_logo_data_uri():
 logo_uri = load_logo_data_uri()
 
 
-# ---------- Research guide sidebar ----------
+# ---------- Compact research guide sidebar ----------
 with st.sidebar:
     st.markdown("""
-    <div dir="rtl" style="direction:rtl;text-align:right;padding:8px 2px 14px;">
-      <div style="font-size:1.25rem;font-weight:800;color:#17496F;">IAQF Studio</div>
-      <div style="font-size:.82rem;color:#64748b;">الدليل التعريفي للمنصة</div>
+    <div dir="rtl" style="text-align:right;padding:10px 4px 12px;">
+      <div style="font-size:1.22rem;font-weight:800;color:#17496F;">IAQF Studio</div>
+      <div style="font-size:.84rem;color:#64748b;">دليل المنصة البحثية</div>
     </div>
     """, unsafe_allow_html=True)
+
     sidebar_section = st.radio(
-        "استكشف المنصة",
+        "القائمة الرئيسية",
         options=[
             "نبذة عن المنصة",
-            "ماذا تقيّم المنصة؟",
+            "أبعاد التقييم",
             "منهجية التقييم",
-            "طريقة الاستخدام",
-            "الخصوصية وحدود التقييم",
-            "عن الإصدار",
+            "دليل الاستخدام",
+            "الخصوصية والحدود",
+            "معلومات الإصدار",
         ],
         label_visibility="collapsed",
     )
-    st.markdown("---")
-    if sidebar_section == "نبذة عن المنصة":
-        st.markdown("""
-        ### نبذة عن IAQF
-        منصة بحثية تجريبية لتحليل جودة المحتوى العربي بمساعدة الذكاء الاصطناعي، وفق إطار يضم أربعة أبعاد و27 مؤشرًا.
 
-        تقدم قراءة منظمة للنص مدعومة بالشواهد والتبريرات والتوصيات، لمساندة المراجعة البشرية.
-        """)
-    elif sidebar_section == "ماذا تقيّم المنصة؟":
-        st.markdown("""
-        ### أبعاد التقييم الأربعة
-        **L — الجودة اللغوية**
-        سلامة اللغة ووضوحها واتساقها.
+    with st.expander("عرض تفاصيل القسم", expanded=True):
+        if sidebar_section == "نبذة عن المنصة":
+            st.markdown("""
+            **IAQF Studio** منصة بحثية تجريبية لتحليل جودة المحتوى العربي بمساعدة الذكاء الاصطناعي، وفق إطار يضم أربعة أبعاد و27 مؤشرًا.
 
-        **E — الجودة المعرفية**
-        جودة المحتوى المعرفي واتساقه ومدى دعم أحكامه بالشواهد المتاحة.
+            تقدم قراءة منظمة مدعومة بالشواهد والتبريرات والتوصيات لمساندة المراجعة البشرية.
+            """)
+        elif sidebar_section == "أبعاد التقييم":
+            st.markdown("""
+            **L — الجودة اللغوية**  
+            سلامة اللغة ووضوحها واتساقها.
 
-        **C — الجودة الثقافية**
-        مراعاة السياق الثقافي والتمثيل والحساسية الثقافية.
+            **E — الجودة المعرفية**  
+            جودة المحتوى المعرفي واتساقه.
 
-        **H — الجودة الأخلاقية**
-        المسؤولية والإنصاف والخصوصية والشفافية واحترام الحقوق.
+            **C — الجودة الثقافية**  
+            مراعاة السياق والتمثيل والحساسية الثقافية.
 
-        يتضمن الإطار 27 مؤشرًا موزعة على الأبعاد الأربعة.
-        """)
-    elif sidebar_section == "منهجية التقييم":
-        st.markdown("""
-        ### منهجية التقييم
-        - مقياس تقدير من **1 إلى 5**.
-        - إسناد الأحكام إلى شواهد نصية وتبريرات.
-        - مراجعة آلية لاحقة لجودة الأدلة واتساق الدرجات.
-        - استخدام **NA** عندما لا ينطبق المؤشر أو لا تتوافر أدلة كافية للحكم.
-        - الدرجة الأولية غير المعايرة ليست درجة نهائية.
+            **H — الجودة الأخلاقية**  
+            المسؤولية والإنصاف والخصوصية والشفافية واحترام الحقوق.
 
-        المراجعة والمعايرة آليتان وليستا تحكيمًا بشريًا مستقلًا.
-        """)
-    elif sidebar_section == "طريقة الاستخدام":
-        st.markdown("""
-        ### طريقة الاستخدام
-        1. اختر مزود الذكاء الاصطناعي.
-        2. الصق النص المراد تقييمه.
-        3. اضغط **ابدأ التقييم الشامل**.
-        4. راجع النتيجة والأبعاد والتغطية والمؤشرات والشواهد.
-        5. نزّل التقرير بصيغة Word أو JSON.
+            **المجموع: 27 مؤشرًا.**
+            """)
+        elif sidebar_section == "منهجية التقييم":
+            st.markdown("""
+            - مقياس تقدير من **1 إلى 5**.
+            - إسناد الأحكام إلى شواهد وتبريرات.
+            - مراجعة آلية لجودة الأدلة واتساق الدرجات.
+            - استخدام **NA** عند عدم الانطباق أو تعذر الحكم.
+            - الدرجة الأولية غير المعايرة ليست درجة نهائية.
 
-        استخدم نصًا تملك حق مشاركته وخاليًا من البيانات الشخصية أو السرية.
-        """)
-    elif sidebar_section == "الخصوصية وحدود التقييم":
-        st.markdown("""
-        ### الخصوصية وحدود التقييم
-        - يُرسل النص إلى مزود الذكاء الاصطناعي المختار لتنفيذ التقييم.
-        - لا تُدخل بيانات شخصية أو سرية أو نصوصًا لا تملك تصريحًا بمشاركتها.
-        - لا ينفذ التطبيق تحققًا خارجيًا مستقلًا من الوقائع أو المراجع أو الأصالة.
-        - النتائج استرشادية وتحتاج إلى مراجعة بشرية قبل اعتمادها.
+            المراجعة والمعايرة آليتان وليستا تحكيمًا بشريًا مستقلًا.
+            """)
+        elif sidebar_section == "دليل الاستخدام":
+            st.markdown("""
+            1. اختر مزود الذكاء الاصطناعي.
+            2. الصق النص المراد تقييمه.
+            3. اضغط **ابدأ التقييم الشامل**.
+            4. راجع النتائج والأبعاد والمؤشرات والشواهد.
+            5. نزّل التقرير بصيغة Word أو JSON.
 
-        **الحالة العلمية:** نموذج بحثي تجريبي، وليس أداة مقننة أو اعتمادًا نهائيًا للإطار.
-        """)
-    else:
-        st.markdown(f"""
-        ### معلومات الإصدار
-        **اسم المنصة:** IAQF Studio
+            استخدم نصًا تملك حق مشاركته وخاليًا من البيانات الشخصية أو السرية.
+            """)
+        elif sidebar_section == "الخصوصية والحدود":
+            st.markdown("""
+            - يُرسل النص إلى مزود الذكاء الاصطناعي المختار لتنفيذ التقييم.
+            - لا تُدخل بيانات شخصية أو سرية.
+            - لا ينفذ التطبيق تحققًا خارجيًا مستقلًا من الوقائع أو المراجع أو الأصالة.
+            - النتائج استرشادية وتحتاج إلى مراجعة بشرية.
 
-        **الإصدار:** {APP_VERSION}
+            **الحالة العلمية:** نموذج بحثي تجريبي، وليس أداة مقننة.
+            """)
+        else:
+            st.markdown(f"""
+            **اسم المنصة:** IAQF Studio  
+            **الإصدار:** {APP_VERSION}  
+            **الإطار:** Integrated Arabic Content Quality Framework  
+            **النطاق:** 4 أبعاد · 27 مؤشرًا  
+            **الحالة:** Research Preview
+            """)
 
-        **الإطار:** Integrated Arabic Content Quality Framework
-
-        **النطاق:** 4 أبعاد · 27 مؤشرًا
-
-        نسخة بحثية تجريبية — Research Preview
-        """)
-    st.markdown("---")
     st.caption("IAQF Studio · Research Preview")
 
 
@@ -155,7 +147,7 @@ html, body, [data-testid="stAppViewContainer"] {
 .hero h1 {color:white; margin:0; font-size:2.35rem; font-weight:800; letter-spacing:.2px;}
 .hero p {color:#e5f2fb; margin:.32rem 0 0 0; font-size:1.02rem;}
 .hero .en {font-size:.9rem; opacity:.9; letter-spacing:.45px;}
-.hero-inner {display:flex; align-items:center; gap:24px;}
+.hero-inner {display:flex; align-items:center; gap:24px; justify-content:flex-start;}
 .logo-wrap {width:150px; height:100px; flex:0 0 150px; overflow:hidden;
   border-radius:15px; display:flex; align-items:center; justify-content:center;
   background:#0b4778; box-shadow:0 5px 16px rgba(0,0,0,.16);
@@ -194,32 +186,52 @@ div[data-testid="stDataFrame"] {border:1px solid #e1eaf1; border-radius:12px;}
  .logo-wrap {width:112px;height:82px;flex-basis:112px;border-radius:11px;}
  .block-container {padding-left:1rem;padding-right:1rem;}
 }
-/* Right-to-left application layout: sidebar on the right */
-[data-testid="stAppViewContainer"] {direction:rtl;}
-[data-testid="stAppViewContainer"] > section[data-testid="stSidebar"] {
-  order:2;
-  border-left:0;
-  border-right:1px solid #dce9f2;
+/* Arabic-first page layout with the sidebar physically on the right */
+[data-testid="stAppViewContainer"] {
+  direction:rtl;
+}
+[data-testid="stAppViewContainer"] > div {
+  direction:rtl;
+}
+[data-testid="stAppViewContainer"] section[data-testid="stSidebar"] {
+  order:2 !important;
+  border-right:1px solid #dce9f2 !important;
+  border-left:0 !important;
   background:linear-gradient(180deg,#f5f9fc 0%,#ffffff 100%);
 }
-[data-testid="stAppViewContainer"] > .main {order:1; direction:rtl;}
-[data-testid="stSidebar"] {direction:rtl; text-align:right;}
+[data-testid="stAppViewContainer"] section.main {
+  order:1 !important;
+  direction:rtl;
+}
+[data-testid="stSidebar"] {
+  direction:rtl !important;
+  text-align:right !important;
+}
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
 [data-testid="stSidebar"] [data-testid="stWidgetLabel"],
-[data-testid="stSidebar"] [data-testid="stRadio"] label {
-  direction:rtl !important; text-align:right !important;
+[data-testid="stSidebar"] [data-testid="stRadio"] label,
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+  direction:rtl !important;
+  text-align:right !important;
 }
 [data-testid="stSidebar"] [data-testid="stRadio"] > div {
   align-items:stretch;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+  flex-direction:row-reverse;
+  justify-content:flex-start;
+  font-size:.98rem !important;
 }
 [data-testid="stSidebar"] [data-testid="stRadio"] label > div:first-child {
   margin-left:.55rem; margin-right:0;
 }
 [data-testid="stSidebar"] hr {border-color:#dce9f2;}
-/* Arabic-first content alignment, while preserving the English brand lockup */
 .block-container {direction:rtl; text-align:right;}
-.hero-inner {direction:ltr;}
-.hero-inner > div:last-child {direction:rtl; text-align:right;}
+.hero-inner {direction:ltr; justify-content:flex-start;}
+.hero-inner > div:last-child {
+  direction:rtl; text-align:right; flex:1; min-width:0;
+}
+.hero h1, .hero p {text-align:right;}
 [data-testid="stTextArea"] textarea {direction:rtl !important; text-align:right !important;}
 """, unsafe_allow_html=True)
 
