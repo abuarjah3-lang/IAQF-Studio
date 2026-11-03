@@ -220,8 +220,10 @@ code, pre {
 }
 """, unsafe_allow_html=True)
 
-# Complete branded header image (single integrated asset)
-st.image("IAQF_Studio_Header.png", use_container_width=True)
+# Complete branded header image — slightly reduced and centered
+header_spacer_left, header_center, header_spacer_right = st.columns([0.05, 0.90, 0.05], gap="small")
+with header_center:
+    st.image("IAQF_Studio_Header.png", use_container_width=True)
 
 # Main workspace on the left; navigation panel on the right.
 main_col, nav_col = st.columns([3.25, 1.05], gap="large")
