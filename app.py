@@ -220,18 +220,8 @@ code, pre {
 }
 """, unsafe_allow_html=True)
 
-st.markdown(f"""
-<div class="hero">
- <div class="hero-inner">
-  <div>
-   <h1><span class="brand-iaqf">IAQF</span> <span class="studio-accent">Studio</span></h1>
-   <p>منصة التقييم الذكي لجودة المحتوى العربي</p>
-   <p class="en">INTEGRATED ARABIC CONTENT QUALITY FRAMEWORK</p>
-  <p class="en">RESEARCH PREVIEW · VERSION {APP_VERSION}</p>
-  </div>
- </div>
-</div>
-""", unsafe_allow_html=True)
+# Complete branded header image (single integrated asset)
+st.image("IAQF_Studio_Header.png", use_container_width=True)
 
 # Main workspace on the left; navigation panel on the right.
 main_col, nav_col = st.columns([3.25, 1.05], gap="large")
