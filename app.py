@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 from io import BytesIO
@@ -10,7 +9,6 @@ import pandas as pd
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
 APP_VERSION = "2.6.4"
-LOGO_PATH = "iaqf_logo_new.png"
 
 st.set_page_config(
     page_title="IAQF Studio",
@@ -18,20 +16,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-
-# ---------- Visual identity ----------
-def load_logo_data_uri():
-    try:
-        with open(LOGO_PATH, "rb") as logo_file:
-            logo_bytes = logo_file.read()
-        mime_type = "image/png" if LOGO_PATH.lower().endswith(".png") else "image/svg+xml"
-        encoded = base64.b64encode(logo_bytes).decode("ascii")
-        return f"data:{mime_type};base64,{encoded}"
-    except OSError:
-        return ""
-
-logo_uri = load_logo_data_uri()
-
 
 st.markdown("""
 <style>
@@ -61,12 +45,7 @@ html, body, [data-testid="stAppViewContainer"] {
 .hero h1 {color:white; margin:0; font-size:2.35rem; font-weight:800; letter-spacing:.2px;}
 .hero p {color:#e5f2fb; margin:.32rem 0 0 0; font-size:1.02rem;}
 .hero .en {font-size:.9rem; opacity:.9; letter-spacing:.45px;}
-.hero-inner {display:flex; align-items:center; gap:24px; justify-content:flex-start;}
-.logo-wrap {width:150px; height:100px; flex:0 0 150px; overflow:hidden;
-  border-radius:15px; display:flex; align-items:center; justify-content:center;
-  background:#0b4778; box-shadow:0 5px 16px rgba(0,0,0,.16);
-  border:1px solid rgba(255,255,255,.12);}
-.logo-wrap img {width:100%; height:100%; object-fit:contain; padding:3px;}
+.hero-inner {display:flex; align-items:center; justify-content:flex-end; width:100%;}
 .section-kicker {color:#2878B9; font-weight:800; font-size:.92rem; margin-bottom:.2rem;}
 .section-title {font-size:1.55rem; font-weight:800; color:#163653; margin:.12rem 0 .65rem;}
 .helper {color:#64748b; font-size:1rem; line-height:1.85;}
@@ -96,15 +75,56 @@ div[data-testid="stDataFrame"] {border:1px solid #e1eaf1; border-radius:12px;}
 .footer {text-align:center; color:#8091a2; font-size:.86rem; padding-top:1.5rem;}
 @media (max-width:700px) {
  .hero {padding:1rem;}.hero h1 {font-size:1.7rem;}
- .hero-inner {gap:13px;}
- .logo-wrap {width:112px;height:82px;flex-basis:112px;border-radius:11px;}
+ .hero-inner {gap:0;}
  .block-container {padding-left:1rem;padding-right:1rem;}
 }
-/* Stable Arabic typography and field alignment */
-[data-testid="stMarkdownContainer"] {text-align:right;}
-[data-testid="stWidgetLabel"] {text-align:right;}
-[data-testid="stTextArea"] textarea {direction:rtl !important; text-align:right !important;}
-[data-testid="stRadio"] label {direction:rtl;}
+/* Global Arabic RTL: text, labels, controls, cards and feedback */
+html, body, [data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] .main,
+[data-testid="stAppViewContainer"] .block-container,
+[data-testid="stVerticalBlock"], [data-testid="stHorizontalBlock"],
+[data-testid="column"], [data-testid="stMarkdownContainer"],
+[data-testid="stWidgetLabel"], [data-testid="stCaptionContainer"],
+[data-testid="stAlert"], [data-testid="stExpander"],
+[data-testid="stForm"], [data-testid="stMetric"],
+[data-testid="stTable"], [data-testid="stDataFrame"] {
+  direction:rtl !important;
+}
+[data-testid="stMarkdownContainer"],
+[data-testid="stWidgetLabel"],
+[data-testid="stCaptionContainer"],
+[data-testid="stAlert"],
+[data-testid="stExpander"],
+[data-testid="stMetric"],
+[data-testid="stTable"] {
+  text-align:right !important;
+}
+[data-testid="stTextArea"] textarea,
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stDateInput"] input {
+  direction:rtl !important; text-align:right !important;
+  unicode-bidi:plaintext;
+}
+[data-testid="stRadio"] > div,
+[data-testid="stCheckbox"] label,
+[data-testid="stSelectbox"] label,
+[data-testid="stMultiSelect"] label,
+[data-testid="stWidgetLabel"] {direction:rtl !important;}
+[data-testid="stRadio"] label,
+[data-testid="stCheckbox"] label {
+  flex-direction:row-reverse; justify-content:flex-start;
+}
+button, [data-testid="stButton"] button,
+[data-testid="stDownloadButton"] button {
+  direction:rtl; font-family:'Cairo','Noto Sans Arabic',Tahoma,sans-serif !important;
+}
+.hero-inner {direction:rtl !important; justify-content:flex-end; width:100%;}
+.hero-inner > div {direction:rtl !important; text-align:right !important;}
+.hero h1, .hero p {text-align:right !important; direction:rtl !important;}
+.hero .en, .english, code, pre {
+  direction:ltr !important; text-align:left !important; unicode-bidi:plaintext;
+}
 
 .nav-brand {direction:rtl;text-align:right;padding:12px 10px 16px;border-bottom:1px solid #dce7f0;margin-bottom:12px;}
 .nav-brand-title {font-size:1.2rem;font-weight:800;color:#123d62;}
@@ -112,15 +132,14 @@ div[data-testid="stDataFrame"] {border:1px solid #e1eaf1; border-radius:12px;}
 .nav-rule {height:1px;background:#dce7f0;margin:12px 0 16px;}
 .nav-footer {direction:rtl;text-align:center;color:#8293a2;font-size:.78rem;margin-top:20px;padding-top:12px;border-top:1px solid #e4edf3;}
 [data-testid="stRadio"] > div {gap:.35rem;}
-[data-testid="stRadio"] label {font-size:.96rem !important;line-height:1.55 !important;}
+[data-testid="stRadio"] label {font-size:.96rem !important;line-height:1.65 !important;}
+[data-testid="stRadio"] label p {direction:ltr; unicode-bidi:plaintext;}
 [data-testid="stTextArea"] textarea {font-size:1.08rem !important;line-height:1.9 !important;}
 """, unsafe_allow_html=True)
 
-logo_html = f'<div class="logo-wrap"><img src="{logo_uri}" alt="IAQF logo"></div>' if logo_uri else ""
 st.markdown(f"""
 <div class="hero">
  <div class="hero-inner">
-  {logo_html}
   <div>
    <h1>IAQF Studio</h1>
    <p>منصة التقييم الذكي لجودة المحتوى العربي</p>
