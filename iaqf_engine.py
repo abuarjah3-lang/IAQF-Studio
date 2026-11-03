@@ -1,8 +1,88 @@
 import json
 import re
+import time
+import random
 import streamlit as st
 from google import genai
 from google.genai import types
+
+
+TRANSIENT_API_CODES = {"429", "500", "502", "503", "504"}
+
+
+def _api_error_code(exc):
+    """Extract a status code from Google GenAI exceptions without depending on SDK internals."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code is not None:
+        return str(code)
+    match = re.search(r"(?<!\d)(429|500|502|503|504)(?!\d)", str(exc))
+    return match.group(1) if match else ""
+
+
+def _generate_content_resilient(client, model, contents, config, trace=None, stage="generation"):
+    """
+    Retry transient Gemini service failures with bounded exponential backoff.
+    An optional fallback model is used only when explicitly configured in Secrets,
+    so research runs never silently change model.
+    """
+    candidates = [model]
+    try:
+        fallback = str(st.secrets.get("GEMINI_FALLBACK_MODEL", "") or "").strip()
+    except Exception:
+        fallback = ""
+    if fallback and fallback != model:
+        candidates.append(fallback)
+
+    attempts_log = []
+    last_error = None
+    for candidate_index, candidate in enumerate(candidates):
+        for attempt in range(1, 4):
+            try:
+                response = client.models.generate_content(
+                    model=candidate,
+                    contents=contents,
+                    config=config,
+                )
+                attempts_log.append({
+                    "stage": stage,
+                    "model": candidate,
+                    "attempts": attempt,
+                    "status": "success",
+                })
+                if trace is not None:
+                    trace.extend(attempts_log)
+                return response, candidate
+            except Exception as exc:
+                last_error = exc
+                code = _api_error_code(exc)
+                attempts_log.append({
+                    "stage": stage,
+                    "model": candidate,
+                    "attempt": attempt,
+                    "error_code": code or "unknown",
+                    "status": "retrying" if code in TRANSIENT_API_CODES and attempt < 3 else "failed",
+                })
+                if code not in TRANSIENT_API_CODES:
+                    if trace is not None:
+                        trace.extend(attempts_log)
+                    raise
+                if attempt < 3:
+                    time.sleep((2 ** (attempt - 1)) + random.uniform(0, 0.35))
+                    continue
+                if candidate_index < len(candidates) - 1:
+                    break
+                if trace is not None:
+                    trace.extend(attempts_log)
+                raise RuntimeError(
+                    f"تعذر الاتصال بنموذج Gemini بعد 3 محاولات (HTTP {code or 'غير محدد'}). "
+                    "قد يكون السبب ازدحامًا مؤقتًا أو حدود الخدمة. أعد المحاولة لاحقًا، "
+                    "أو أضف GEMINI_FALLBACK_MODEL إلى Secrets لتفعيل نموذج احتياطي."
+                ) from exc
+
+    if trace is not None:
+        trace.extend(attempts_log)
+    raise RuntimeError(f"فشل الاتصال بخدمة Gemini: {last_error}") from last_error
+
 
 DIMENSIONS = {
     "L": "الجودة اللغوية",
@@ -128,7 +208,7 @@ def _quote_is_verbatim(evidence, source_text):
     return bool(quote) and quote in source
 
 
-def _repair_invalid_evidence(client, model, source_text, data):
+def _repair_invalid_evidence(client, model, source_text, data, api_trace=None):
     """Ask the model once to repair only evidence quotes that are not verbatim.
 
     This is a bounded repair pass, not independent verification of the score.
@@ -153,13 +233,13 @@ def _repair_invalid_evidence(client, model, source_text, data):
         "النتائج الحالية لهذه المؤشرات:\n" + json.dumps({k: indicators.get(k) for k in invalid}, ensure_ascii=False)
     )
     try:
-        response = client.models.generate_content(
-            model=model,
-            contents=repair_prompt,
-            config=types.GenerateContentConfig(
+        response, used_model = _generate_content_resilient(
+            client, model, repair_prompt,
+            types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.0,
             ),
+            trace=api_trace, stage="evidence_repair",
         )
         repaired = _extract_json(response.text or "")
         repaired_items = repaired.get("indicators", {}) if isinstance(repaired, dict) else {}
@@ -173,7 +253,7 @@ def _repair_invalid_evidence(client, model, source_text, data):
         return data, invalid
 
 
-def _audit_evidence_quality(client, model, source_text, data):
+def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
     """Second-pass model audit of evidence relevance, sufficiency and score consistency.
 
     Literal matching is checked deterministically elsewhere. This audit is an
@@ -215,13 +295,13 @@ def _audit_evidence_quality(client, model, source_text, data):
         + "\n\nالنص الأصلي:\n<<<TEXT>>>\n" + source_text + "\n<<<END TEXT>>>"
     )
     try:
-        response = client.models.generate_content(
-            model=model,
-            contents=audit_prompt,
-            config=types.GenerateContentConfig(
+        response, used_model = _generate_content_resilient(
+            client, model, audit_prompt,
+            types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.0,
             ),
+            trace=api_trace, stage="evidence_audit",
         )
         parsed = _extract_json(response.text or "")
         audits = parsed.get("audits", {}) if isinstance(parsed, dict) else {}
@@ -353,7 +433,16 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
                 dim_values[meta["dimension"]][-1] = score
         elif score is not None:
             calibrated_score = None
-            calibration_reason = "تعذر التدقيق؛ بقيت الدرجة الأولية ظاهرة وغير معايرة."
+            calibration_reason = "تعذر التدقيق؛ عُرضت الدرجة الأولية للشفافية، ولم تُعتمد ضمن النتائج المعايرة."
+            # Fail safely: keep the raw score visible, but exclude it from calibrated
+            # dimension and overall averages until the evidence audit succeeds.
+            if dim_values[meta["dimension"]]:
+                dim_values[meta["dimension"]].pop()
+            assessable -= 1
+            na_count += 1
+            na_reason = "تعذر الحكم"
+            score = None
+            confidence = "منخفض"
 
         normalized[code] = {
             "score": score,
@@ -466,16 +555,19 @@ def evaluate_text(content: str):
         + "\n<<<END TEXT>>>"
     )
 
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
+    api_trace = []
+    response, primary_model_used = _generate_content_resilient(
+        client, model, prompt,
+        types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=0.0,
         ),
+        trace=api_trace, stage="initial_evaluation",
     )
     data = _extract_json(response.text or "")
-    data, repair_attempted = _repair_invalid_evidence(client, model, content, data)
+    data, repair_attempted = _repair_invalid_evidence(
+        client, primary_model_used, content, data, api_trace=api_trace
+    )
 
     indicators_after_repair = data.get("indicators", {}) if isinstance(data, dict) else {}
     repair_succeeded = [
@@ -485,9 +577,11 @@ def evaluate_text(content: str):
     ]
     repair_failed = [code for code in repair_attempted if code not in repair_succeeded]
 
-    evidence_audits, audit_meta = _audit_evidence_quality(client, model, content, data)
+    evidence_audits, audit_meta = _audit_evidence_quality(client, primary_model_used, content, data, api_trace=api_trace)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.4.1.1-demo"
+    result["version"] = "2.5.1"
+    result["api_diagnostics"] = api_trace
+    result["model_used"] = primary_model_used
     result["external_verification_performed"] = False
     result["verification_scope"] = (
         "تحليل النص والشواهد المقدمة ومراجعة آلية داخلية لصلتها وكفايتها واتساقها؛ "
