@@ -2,16 +2,41 @@ import json
 import re
 import time
 import random
+from types import SimpleNamespace
 import streamlit as st
 from google import genai
 from google.genai import types
 
 
+class GroqModelsAdapter:
+    """Small compatibility layer so Groq uses the same prompt and JSON workflow."""
+    def __init__(self, api_key):
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("مكتبة openai غير مثبتة؛ أضف openai إلى requirements.txt ثم أعد النشر.") from exc
+        self.client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+
+    def generate_content(self, model, contents, config=None):
+        temperature = getattr(config, "temperature", 0.0) if config is not None else 0.0
+        response_format = {"type": "json_object"} if getattr(config, "response_mime_type", "") == "application/json" else None
+        kwargs = {"model": model, "messages": [{"role": "user", "content": contents}]}
+        if response_format:
+            kwargs["response_format"] = response_format
+        response = self.client.chat.completions.create(**kwargs)
+        return SimpleNamespace(text=response.choices[0].message.content or "")
+
+
+class GroqClientAdapter:
+    def __init__(self, api_key):
+        self.models = GroqModelsAdapter(api_key)
+
+
 TRANSIENT_API_CODES = {"429", "500", "502", "503", "504"}
 
 
-class GeminiRequestError(RuntimeError):
-    """A Gemini request failure carrying a safe, structured attempt log."""
+class ProviderRequestError(RuntimeError):
+    """A model-provider request failure carrying a safe, structured attempt log."""
 
     def __init__(self, message, diagnostics=None):
         super().__init__(message)
@@ -30,17 +55,19 @@ def _api_error_code(exc):
 
 def _generate_content_resilient(client, model, contents, config, trace=None, stage="generation"):
     """
-    Retry transient Gemini service failures with bounded exponential backoff.
-    An optional fallback model is used only when explicitly configured in Secrets.
+    Retry transient provider failures with bounded exponential backoff.
+    Gemini may use its explicitly configured fallback; Groq never silently switches providers.
     The structured diagnostics contain no prompt text or credentials.
     """
+    provider = getattr(client, "provider", "Gemini")
     candidates = [model]
-    try:
-        fallback = str(st.secrets.get("GEMINI_FALLBACK_MODEL", "") or "").strip()
-    except Exception:
-        fallback = ""
-    if fallback and fallback != model:
-        candidates.append(fallback)
+    if provider == "Gemini":
+        try:
+            fallback = str(st.secrets.get("GEMINI_FALLBACK_MODEL", "") or "").strip()
+        except Exception:
+            fallback = ""
+        if fallback and fallback != model:
+            candidates.append(fallback)
 
     attempts_log = []
     last_error = None
@@ -54,6 +81,7 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                 )
                 attempts_log.append({
                     "stage": stage,
+                    "provider": provider,
                     "model": candidate,
                     "attempt": attempt,
                     "status": "success",
@@ -67,6 +95,7 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                 code = _api_error_code(exc)
                 attempts_log.append({
                     "stage": stage,
+                    "provider": provider,
                     "model": candidate,
                     "attempt": attempt,
                     "error_code": code or "unknown",
@@ -75,8 +104,8 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                 if code not in TRANSIENT_API_CODES:
                     if trace is not None:
                         trace.extend(attempts_log)
-                    raise GeminiRequestError(
-                        f"تعذر تنفيذ طلب Gemini في مرحلة {stage} "
+                    raise ProviderRequestError(
+                        f"تعذر تنفيذ طلب {provider} في مرحلة {stage} "
                         f"(النموذج: {candidate}، HTTP {code or 'غير محدد'}).",
                         diagnostics=attempts_log,
                     ) from exc
@@ -87,16 +116,16 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                     break
                 if trace is not None:
                     trace.extend(attempts_log)
-                raise GeminiRequestError(
-                    f"تعذر الاتصال بنموذج Gemini بعد استنفاد المحاولات المتاحة "
+                raise ProviderRequestError(
+                    f"تعذر الاتصال بنموذج {provider} بعد استنفاد المحاولات المتاحة "
                     f"(آخر مرحلة: {stage}، آخر نموذج: {candidate}، HTTP {code or 'غير محدد'}).",
                     diagnostics=attempts_log,
                 ) from exc
 
     if trace is not None:
         trace.extend(attempts_log)
-    raise GeminiRequestError(
-        f"فشل الاتصال بخدمة Gemini في مرحلة {stage}.",
+    raise ProviderRequestError(
+        f"فشل الاتصال بمزود {provider} في مرحلة {stage}.",
         diagnostics=attempts_log,
     ) from last_error
 
@@ -527,14 +556,23 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
     }
 
 
-def evaluate_text(content: str):
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        raise RuntimeError("لم يتم إعداد GEMINI_API_KEY في إعدادات Secrets الخاصة بتطبيق Streamlit.")
-
-    model = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
-    client = genai.Client(api_key=api_key)
+def evaluate_text(content: str, provider: str = "Gemini"):
+    if provider == "Groq":
+        try:
+            api_key = st.secrets["GROQ_API_KEY"]
+        except Exception:
+            raise RuntimeError("لم يتم إعداد GROQ_API_KEY في إعدادات Secrets الخاصة بتطبيق Streamlit.")
+        model = st.secrets.get("GROQ_MODEL", "openai/gpt-oss-120b")
+        client = GroqClientAdapter(api_key)
+        client.provider = "Groq"
+    else:
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            raise RuntimeError("لم يتم إعداد GEMINI_API_KEY في إعدادات Secrets الخاصة بتطبيق Streamlit.")
+        model = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
+        client = genai.Client(api_key=api_key)
+        client.provider = "Gemini"
     indicator_spec = {
         code: {
             "name": meta["name"],
@@ -582,7 +620,7 @@ def evaluate_text(content: str):
             ),
             trace=api_trace, stage="initial_evaluation",
         )
-    except GeminiRequestError as exc:
+    except ProviderRequestError as exc:
         # Attach the complete trace accumulated by this evaluation attempt.
         exc.diagnostics = list(api_trace)
         raise
@@ -601,7 +639,8 @@ def evaluate_text(content: str):
 
     evidence_audits, audit_meta = _audit_evidence_quality(client, primary_model_used, content, data, api_trace=api_trace)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.5.1"
+    result["version"] = "2.6.0"
+    result["provider_used"] = provider
     result["api_diagnostics"] = api_trace
     result["model_used"] = primary_model_used
     result["external_verification_performed"] = False

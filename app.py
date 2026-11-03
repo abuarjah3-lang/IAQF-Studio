@@ -9,7 +9,7 @@ import pandas as pd
 
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
-APP_VERSION = "2.5.2"
+APP_VERSION = "2.6.0"
 LOGO_PATH = "iaqf_logo.svg"
 
 st.set_page_config(
@@ -94,13 +94,20 @@ with nav_right:
 st.markdown('<div class="section-kicker">WORKSPACE</div><div class="section-title">مساحة التقييم</div>', unsafe_allow_html=True)
 st.markdown('<div class="helper">أدخل النص العربي المراد تقييمه. يتولى النظام تحليل المؤشرات السبعة والعشرين واستخراج الشواهد وتقديم النتائج الأولية.</div>', unsafe_allow_html=True)
 
+provider = st.radio(
+    "مزود الذكاء الاصطناعي",
+    options=["Gemini", "Groq"],
+    horizontal=True,
+    help="اختر المزود الذي سينفذ هذا التقييم. لا ينتقل التطبيق تلقائيًا بين مزودين مختلفين حتى تبقى هوية النموذج موثقة.",
+)
+
 content = st.text_area(
     "النص المراد تقييمه",
     height=280,
     placeholder="الصق النص العربي المراد تقييمه هنا...",
     help="لا تحتاج إلى إدخال درجات أو شواهد أو بيانات إضافية.",
 )
-st.caption("خصوصية الإدخال: يُرسل النص إلى خدمة Gemini المتصلة بالتطبيق لإجراء التقييم؛ لا تلصق بيانات شخصية أو سرية.")
+st.caption(f"خصوصية الإدخال: يُرسل النص إلى مزود {provider} المختار لإجراء التقييم؛ لا تلصق بيانات شخصية أو سرية.")
 
 if "evaluation_result" not in st.session_state:
     st.session_state.evaluation_result = None
@@ -137,7 +144,7 @@ if run_eval:
         st.session_state.api_failure_diagnostics = []
         try:
             with st.spinner("يجري تحليل النص وتقييم مؤشرات IAQF الـ27 ومراجعة جودة الشواهد..."):
-                st.session_state.evaluation_result = evaluate_text(content.strip())
+                st.session_state.evaluation_result = evaluate_text(content.strip(), provider=provider)
                 st.session_state.evaluation_result["version"] = APP_VERSION
                 st.session_state.evaluated_text = content.strip()
         except Exception as exc:
@@ -145,7 +152,7 @@ if run_eval:
             st.session_state.api_failure_diagnostics = getattr(exc, "diagnostics", []) or []
             st.error(f"تعذر إكمال التقييم: {error_text}")
             if st.session_state.api_failure_diagnostics:
-                with st.expander("تشخيص اتصال Gemini — تفاصيل المحاولات", expanded=True):
+                with st.expander(f"تشخيص اتصال {provider} — تفاصيل المحاولات", expanded=True):
                     st.dataframe(
                         pd.DataFrame(st.session_state.api_failure_diagnostics),
                         use_container_width=True,
@@ -153,22 +160,20 @@ if run_eval:
                     )
                     st.caption(
                         "يعرض هذا السجل المرحلة والنموذج ورقم المحاولة والنتيجة ورمز HTTP فقط؛ "
-                        "ولا يعرض مفتاح API أو النص المرسل إلى Gemini."
+                        "ولا يعرض مفتاح API أو النص المرسل إلى مزود الخدمة."
                     )
             if "503" in error_text or "ازدحام" in error_text:
-                st.warning(
-                    "الخدمة أعادت خطأ 503؛ هذا عطل مؤقت من جهة Gemini وليس خطأ في النص المدخل. "
-                    "أُضيفت الآن إعادة محاولات تلقائية محدودة، ويمكن تفعيل نموذج احتياطي من Secrets."
-                )
+                st.warning("الخدمة أعادت خطأ 503؛ قد يكون عطلًا مؤقتًا من مزود النموذج. أُعيدت المحاولة تلقائيًا ضمن حدود محددة.")
             elif "429" in error_text:
-                st.warning("يبدو أن الطلب تجاوز حد الاستخدام أو معدل الطلبات. تحقق من الحصة والفوترة في Google AI Studio.")
+                st.warning("يبدو أن الطلب تجاوز حد الاستخدام أو معدل الطلبات. تحقق من حدود الاستخدام لدى مزود النموذج المختار.")
             else:
-                st.info("تحقق من GEMINI_API_KEY وGEMINI_MODEL في Streamlit Secrets، ومن صلاحية النموذج المحدد.")
+                st.info(f"تحقق من إعدادات {provider} في Streamlit Secrets، ومن صلاحية النموذج المحدد.")
 
 def build_report(result, source_text):
     return {
         "framework": "IAQF",
         "version": result.get("version", APP_VERSION),
+        "provider_used": result.get("provider_used", ""),
         "model_used": result.get("model_used", ""),
         "api_diagnostics": result.get("api_diagnostics", []),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -404,11 +409,11 @@ if result:
     st.markdown('<div class="section-kicker">RESULTS</div><div class="section-title">تقرير التقييم</div>', unsafe_allow_html=True)
     st.caption(
         f"إصدار المحرك: {result.get('version', 'غير محدد')} | إصدار الواجهة: {APP_VERSION} "
-        f"| النموذج: {result.get('model_used', 'غير محدد')}"
+        f"| المزود: {result.get('provider_used', 'غير محدد')} | النموذج: {result.get('model_used', 'غير محدد')}"
     )
     api_diagnostics = result.get("api_diagnostics", [])
     if api_diagnostics:
-        with st.expander("تفاصيل اتصال Gemini ومحاولات الاستعادة"):
+        with st.expander(f"تفاصيل اتصال {result.get('provider_used', 'المزود')} ومحاولات الاستعادة"):
             st.dataframe(pd.DataFrame(api_diagnostics), use_container_width=True, hide_index=True)
             st.caption("السجل يوضح المرحلة والنموذج وعدد المحاولات وحالة كل طلب، دون عرض مفتاح API أو النص المرسل.")
     st.info("النتائج آلية استرشادية؛ ينبغي مراجعتها بشريًا قبل استخدامها في قرارات بحثية أو نشرية.")
