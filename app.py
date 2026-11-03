@@ -9,7 +9,7 @@ import pandas as pd
 
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
-APP_VERSION = "2.5.1"
+APP_VERSION = "2.5.2"
 LOGO_PATH = "iaqf_logo.svg"
 
 st.set_page_config(
@@ -106,11 +106,14 @@ if "evaluation_result" not in st.session_state:
     st.session_state.evaluation_result = None
 if "evaluated_text" not in st.session_state:
     st.session_state.evaluated_text = ""
+if "api_failure_diagnostics" not in st.session_state:
+    st.session_state.api_failure_diagnostics = []
 
 cached_result = st.session_state.evaluation_result
 if cached_result and cached_result.get("version") != APP_VERSION:
     st.session_state.evaluation_result = None
     st.session_state.evaluated_text = ""
+    st.session_state.api_failure_diagnostics = []
     st.info("تم تحديث المنصة إلى إصدار جديد؛ أُخفي التقرير السابق لتجنب عرض نتائج بصيغة قديمة. أعد التقييم.")
 
 run_col, reset_col = st.columns([2, 1])
@@ -122,12 +125,16 @@ with reset_col:
 if reset_eval:
     st.session_state.evaluation_result = None
     st.session_state.evaluated_text = ""
+    st.session_state.api_failure_diagnostics = []
     st.rerun()
 
 if run_eval:
     if not content.strip():
         st.warning("يرجى لصق النص أولًا.")
     else:
+        st.session_state.evaluation_result = None
+        st.session_state.evaluated_text = ""
+        st.session_state.api_failure_diagnostics = []
         try:
             with st.spinner("يجري تحليل النص وتقييم مؤشرات IAQF الـ27 ومراجعة جودة الشواهد..."):
                 st.session_state.evaluation_result = evaluate_text(content.strip())
@@ -135,7 +142,19 @@ if run_eval:
                 st.session_state.evaluated_text = content.strip()
         except Exception as exc:
             error_text = str(exc)
+            st.session_state.api_failure_diagnostics = getattr(exc, "diagnostics", []) or []
             st.error(f"تعذر إكمال التقييم: {error_text}")
+            if st.session_state.api_failure_diagnostics:
+                with st.expander("تشخيص اتصال Gemini — تفاصيل المحاولات", expanded=True):
+                    st.dataframe(
+                        pd.DataFrame(st.session_state.api_failure_diagnostics),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    st.caption(
+                        "يعرض هذا السجل المرحلة والنموذج ورقم المحاولة والنتيجة ورمز HTTP فقط؛ "
+                        "ولا يعرض مفتاح API أو النص المرسل إلى Gemini."
+                    )
             if "503" in error_text or "ازدحام" in error_text:
                 st.warning(
                     "الخدمة أعادت خطأ 503؛ هذا عطل مؤقت من جهة Gemini وليس خطأ في النص المدخل. "
@@ -391,6 +410,7 @@ if result:
     if api_diagnostics:
         with st.expander("تفاصيل اتصال Gemini ومحاولات الاستعادة"):
             st.dataframe(pd.DataFrame(api_diagnostics), use_container_width=True, hide_index=True)
+            st.caption("السجل يوضح المرحلة والنموذج وعدد المحاولات وحالة كل طلب، دون عرض مفتاح API أو النص المرسل.")
     st.info("النتائج آلية استرشادية؛ ينبغي مراجعتها بشريًا قبل استخدامها في قرارات بحثية أو نشرية.")
     st.warning("حدود التحقق: مراجعة صلة الأدلة وكفايتها واتساقها آلية وليست مراجعة بشرية مستقلة؛ ولا يجري التطبيق تحققًا خارجيًا من المراجع أو الوقائع أو الأصالة أو بيانات سياق الإنتاج.")
 

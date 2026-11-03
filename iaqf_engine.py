@@ -10,6 +10,15 @@ from google.genai import types
 TRANSIENT_API_CODES = {"429", "500", "502", "503", "504"}
 
 
+class GeminiRequestError(RuntimeError):
+    """A Gemini request failure carrying a safe, structured attempt log."""
+
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = list(diagnostics or [])
+
+
+
 def _api_error_code(exc):
     """Extract a status code from Google GenAI exceptions without depending on SDK internals."""
     code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
@@ -22,8 +31,8 @@ def _api_error_code(exc):
 def _generate_content_resilient(client, model, contents, config, trace=None, stage="generation"):
     """
     Retry transient Gemini service failures with bounded exponential backoff.
-    An optional fallback model is used only when explicitly configured in Secrets,
-    so research runs never silently change model.
+    An optional fallback model is used only when explicitly configured in Secrets.
+    The structured diagnostics contain no prompt text or credentials.
     """
     candidates = [model]
     try:
@@ -46,8 +55,9 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                 attempts_log.append({
                     "stage": stage,
                     "model": candidate,
-                    "attempts": attempt,
+                    "attempt": attempt,
                     "status": "success",
+                    "error_code": "",
                 })
                 if trace is not None:
                     trace.extend(attempts_log)
@@ -65,7 +75,11 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                 if code not in TRANSIENT_API_CODES:
                     if trace is not None:
                         trace.extend(attempts_log)
-                    raise
+                    raise GeminiRequestError(
+                        f"تعذر تنفيذ طلب Gemini في مرحلة {stage} "
+                        f"(النموذج: {candidate}، HTTP {code or 'غير محدد'}).",
+                        diagnostics=attempts_log,
+                    ) from exc
                 if attempt < 3:
                     time.sleep((2 ** (attempt - 1)) + random.uniform(0, 0.35))
                     continue
@@ -73,15 +87,18 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                     break
                 if trace is not None:
                     trace.extend(attempts_log)
-                raise RuntimeError(
-                    f"تعذر الاتصال بنموذج Gemini بعد 3 محاولات (HTTP {code or 'غير محدد'}). "
-                    "قد يكون السبب ازدحامًا مؤقتًا أو حدود الخدمة. أعد المحاولة لاحقًا، "
-                    "أو أضف GEMINI_FALLBACK_MODEL إلى Secrets لتفعيل نموذج احتياطي."
+                raise GeminiRequestError(
+                    f"تعذر الاتصال بنموذج Gemini بعد استنفاد المحاولات المتاحة "
+                    f"(آخر مرحلة: {stage}، آخر نموذج: {candidate}، HTTP {code or 'غير محدد'}).",
+                    diagnostics=attempts_log,
                 ) from exc
 
     if trace is not None:
         trace.extend(attempts_log)
-    raise RuntimeError(f"فشل الاتصال بخدمة Gemini: {last_error}") from last_error
+    raise GeminiRequestError(
+        f"فشل الاتصال بخدمة Gemini في مرحلة {stage}.",
+        diagnostics=attempts_log,
+    ) from last_error
 
 
 DIMENSIONS = {
@@ -556,14 +573,19 @@ def evaluate_text(content: str):
     )
 
     api_trace = []
-    response, primary_model_used = _generate_content_resilient(
-        client, model, prompt,
-        types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.0,
-        ),
-        trace=api_trace, stage="initial_evaluation",
-    )
+    try:
+        response, primary_model_used = _generate_content_resilient(
+            client, model, prompt,
+            types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+            ),
+            trace=api_trace, stage="initial_evaluation",
+        )
+    except GeminiRequestError as exc:
+        # Attach the complete trace accumulated by this evaluation attempt.
+        exc.diagnostics = list(api_trace)
+        raise
     data = _extract_json(response.text or "")
     data, repair_attempted = _repair_invalid_evidence(
         client, primary_model_used, content, data, api_trace=api_trace
