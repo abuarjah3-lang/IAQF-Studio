@@ -9,7 +9,7 @@ import pandas as pd
 
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
-APP_VERSION = "2.6.3"
+APP_VERSION = "2.6.4"
 LOGO_PATH = "iaqf_logo.svg"
 
 st.set_page_config(
@@ -480,6 +480,16 @@ if result:
     calibration_meta = result.get("score_calibration", {})
     if audit_meta:
         st.caption("حالة مراجعة جودة الأدلة: " + audit_meta.get("status", "غير محددة"))
+        retry_items = audit_meta.get("retry_attempts", [])
+        if retry_items:
+            recovered = audit_meta.get("retry_recovered", [])
+            unresolved = audit_meta.get("und_audited", [])
+            st.caption(
+                "إعادة تدقيق المؤشرات الناقصة مرة واحدة: "
+                + str(audit_meta.get("retry_count", len(retry_items)))
+                + " | استُعيد حكمها: " + (", ".join(recovered) or "لا يوجد")
+                + " | بقي دون تدقيق: " + (", ".join(unresolved) or "لا يوجد")
+            )
     calibration_status = calibration_meta.get("status", "لم تُسجّل حالة المعايرة")
     if calibration_status == "اكتملت المعايرة":
         st.success("حالة المعايرة: اكتملت المراجعة الآلية الثانية للمؤشرات التي أمكن تدقيقها.")

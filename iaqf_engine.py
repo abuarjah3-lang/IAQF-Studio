@@ -309,13 +309,7 @@ def _repair_invalid_evidence(client, model, source_text, data, api_trace=None):
 
 
 def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
-    """Audit numeric indicators in small batches to stay within provider token limits.
-
-    Exact quote matching is already checked deterministically. The audit therefore
-    receives only the indicator guidance, score, quote and rationale—not the full
-    source text repeated in every request. This reduces TPM use without changing
-    the IAQF criteria or calibration rules.
-    """
+    """Audit numeric indicators in batches, then retry only missing indicator verdicts once."""
     indicators = data.get("indicators", {}) if isinstance(data, dict) else {}
     candidates = {}
     for code, item in indicators.items():
@@ -337,15 +331,28 @@ def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
     cleaned = {}
     failed_batches = []
     batch_log = []
+    retry_log = []
 
-    # The initial evaluation and possible evidence-repair call may already have
-    # consumed most of a rolling TPM window. Allow that window to clear before audit.
     if getattr(client, "provider", "") == "Groq":
         time.sleep(65)
 
-    for batch_index, batch_codes in enumerate(batches):
-        batch_candidates = {code: candidates[code] for code in batch_codes}
-        audit_prompt = (
+    allowed = ("قوي", "جزئي", "غير مرتبط", "متناقض")
+
+    def normalize_audit(item):
+        if not isinstance(item, dict) or item.get("verdict") not in allowed:
+            return None
+        return {
+            "verdict": item["verdict"],
+            "relevance": str(item.get("relevance", "")).strip(),
+            "sufficiency": str(item.get("sufficiency", "")).strip(),
+            "consistency": str(item.get("consistency", "")).strip(),
+            "recommended_action": str(item.get("recommended_action", "")).strip(),
+            "calibrated_score": item.get("calibrated_score"),
+            "calibration_reason": str(item.get("calibration_reason", "")).strip(),
+        }
+
+    def make_audit_prompt(selected_codes, selected_candidates):
+        return (
             "أنت مدقق جودة أدلة مستقل عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
             "من حيث: (1) صلة الاقتباس بالمؤشر تحديدًا، (2) كفاية الاقتباس والتبرير لدعم الدرجة "
             "الممنوحة، (3) اتساق الدرجة مع الاقتباس والتبرير. "
@@ -364,45 +371,87 @@ def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
             "\"relevance\":\"...\",\"sufficiency\":\"...\",\"consistency\":\"...\"}}}. "
             "لا تخترع شواهد ولا ترفع أي درجة.\n\n"
             "تعريفات المؤشرات:\n"
-            + json.dumps({c: INDICATOR_GUIDANCE[c] for c in batch_codes}, ensure_ascii=False)
+            + json.dumps({c: INDICATOR_GUIDANCE[c] for c in selected_codes}, ensure_ascii=False)
             + "\n\nالمؤشرات المراد تدقيقها:\n"
-            + json.dumps(batch_candidates, ensure_ascii=False)
+            + json.dumps(selected_candidates, ensure_ascii=False)
         )
+
+    for batch_index, batch_codes in enumerate(batches):
+        batch_candidates = {code: candidates[code] for code in batch_codes}
         try:
             response, used_model = _generate_content_resilient(
-                client, model, audit_prompt,
-                types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.0,
-                ),
-                trace=api_trace, stage="evidence_audit",
-                groq_rate_limit_backoff=True,
+                client, model, make_audit_prompt(batch_codes, batch_candidates),
+                types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
+                trace=api_trace, stage="evidence_audit", groq_rate_limit_backoff=True,
             )
             parsed = _extract_json(response.text or "")
             audits = parsed.get("audits", {}) if isinstance(parsed, dict) else {}
-            allowed = ("قوي", "جزئي", "غير مرتبط", "متناقض")
-            batch_missing = []
+            missing_codes = []
             for code in batch_codes:
-                item = audits.get(code, {})
-                if not isinstance(item, dict):
-                    item = {}
-                verdict = item.get("verdict")
-                if verdict not in allowed:
-                    verdict = "تعذر التدقيق"
-                cleaned[code] = {
-                    "verdict": verdict,
-                    "relevance": str(item.get("relevance", "")).strip(),
-                    "sufficiency": str(item.get("sufficiency", "")).strip(),
-                    "consistency": str(item.get("consistency", "")).strip(),
-                    "recommended_action": str(item.get("recommended_action", "")).strip(),
-                    "calibrated_score": item.get("calibrated_score"),
-                    "calibration_reason": str(item.get("calibration_reason", "")).strip(),
-                }
-                if verdict == "تعذر التدقيق":
-                    batch_missing.append(code)
-            if batch_missing:
-                failed_batches.append({"batch": batch_index + 1, "indicators": batch_missing, "reason": "استجابة تدقيق ناقصة"})
-            batch_log.append({"batch": batch_index + 1, "indicators": batch_codes, "status": "success"})
+                normalized = normalize_audit(audits.get(code))
+                if normalized is None:
+                    cleaned[code] = {
+                        "verdict": "تعذر التدقيق", "relevance": "", "sufficiency": "",
+                        "consistency": "", "recommended_action": "", "calibrated_score": None,
+                        "calibration_reason": "لم تتضمن الاستجابة حكم تدقيق صالحًا لهذا المؤشر.",
+                    }
+                    missing_codes.append(code)
+                else:
+                    cleaned[code] = normalized
+
+            recovered_codes = []
+            unresolved_codes = []
+            # One bounded, indicator-specific retry. Never repeat the whole batch.
+            for code in missing_codes:
+                retry_status = "failed"
+                retry_reason = ""
+                try:
+                    retry_prompt = make_audit_prompt([code], {code: candidates[code]})
+                    retry_response, retry_model = _generate_content_resilient(
+                        client, model, retry_prompt,
+                        types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
+                        trace=api_trace, stage="evidence_audit_retry", groq_rate_limit_backoff=True,
+                    )
+                    retry_parsed = _extract_json(retry_response.text or "")
+                    retry_audits = retry_parsed.get("audits", {}) if isinstance(retry_parsed, dict) else {}
+                    retry_item = normalize_audit(retry_audits.get(code))
+                    if retry_item is not None:
+                        cleaned[code] = retry_item
+                        retry_status = "recovered"
+                        recovered_codes.append(code)
+                    else:
+                        retry_reason = "استجابة الإعادة لم تتضمن حكمًا صالحًا."
+                        unresolved_codes.append(code)
+                except Exception as retry_exc:
+                    retry_reason = str(retry_exc)[:240]
+                    unresolved_codes.append(code)
+                retry_log.append({
+                    "indicator": code,
+                    "attempted": True,
+                    "status": retry_status,
+                    "reason": retry_reason,
+                })
+
+            if unresolved_codes:
+                failed_batches.append({
+                    "batch": batch_index + 1,
+                    "indicators": unresolved_codes,
+                    "reason": "تعذر استكمال تدقيق مؤشر/مؤشرات بعد إعادة محدودة",
+                })
+            if unresolved_codes:
+                batch_status = "partial"
+            elif recovered_codes:
+                batch_status = "recovered_after_retry"
+            else:
+                batch_status = "success"
+            batch_log.append({
+                "batch": batch_index + 1,
+                "indicators": batch_codes,
+                "status": batch_status,
+                "initially_missing": missing_codes,
+                "recovered": recovered_codes,
+                "unresolved": unresolved_codes,
+            })
         except Exception as exc:
             failed_batches.append({
                 "batch": batch_index + 1,
@@ -411,15 +460,20 @@ def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
             })
             for code in batch_codes:
                 cleaned[code] = {
-                    "verdict": "تعذر التدقيق",
-                    "relevance": "",
-                    "sufficiency": "",
-                    "consistency": "",
-                    "recommended_action": "",
-                    "calibrated_score": None,
+                    "verdict": "تعذر التدقيق", "relevance": "", "sufficiency": "",
+                    "consistency": "", "recommended_action": "", "calibrated_score": None,
                     "calibration_reason": "تعذر إكمال تدقيق هذه الدفعة تقنيًا؛ لم تُعتمد الدرجة الأولية.",
                 }
-            batch_log.append({"batch": batch_index + 1, "indicators": batch_codes, "status": "failed"})
+            batch_log.append({
+                "batch": batch_index + 1, "indicators": batch_codes,
+                "status": "failed", "initially_missing": batch_codes,
+                "recovered": [], "unresolved": batch_codes,
+            })
+            for code in batch_codes:
+                retry_log.append({
+                    "indicator": code, "attempted": False, "status": "not_attempted",
+                    "reason": "تعذر تنفيذ طلب الدفعة؛ لم تبدأ إعادة المؤشر المنفرد.",
+                })
         if getattr(client, "provider", "") == "Groq" and batch_index < len(batches) - 1:
             time.sleep(15)
 
@@ -431,6 +485,9 @@ def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
         "und_audited": missing,
         "batches": batch_log,
         "failed_batches": failed_batches,
+        "retry_attempts": retry_log,
+        "retry_count": sum(1 for item in retry_log if item["attempted"]),
+        "retry_recovered": [item["indicator"] for item in retry_log if item["status"] == "recovered"],
         "batch_size": batch_size,
         "batch_count": len(batches),
     }
@@ -636,7 +693,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
 
     return {
         "framework": "IAQF",
-        "version": "2.6.3",
+        "version": "2.6.4",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
@@ -835,7 +892,7 @@ def evaluate_text(content: str, provider: str = "Gemini"):
 
     evidence_audits, audit_meta = _audit_evidence_quality(client, primary_model_used, content, data, api_trace=api_trace)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.6.3"
+    result["version"] = "2.6.4"
     result["provider_used"] = provider
     result["api_diagnostics"] = api_trace
     result["model_used"] = primary_model_used
