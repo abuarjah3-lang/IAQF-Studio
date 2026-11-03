@@ -9,7 +9,7 @@ import pandas as pd
 
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
-APP_VERSION = "2.6.1"
+APP_VERSION = "2.6.2"
 LOGO_PATH = "iaqf_logo.svg"
 
 st.set_page_config(

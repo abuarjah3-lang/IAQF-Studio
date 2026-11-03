@@ -57,7 +57,7 @@ def _api_error_code(exc):
     return match.group(1) if match else ""
 
 
-def _generate_content_resilient(client, model, contents, config, trace=None, stage="generation"):
+def _generate_content_resilient(client, model, contents, config, trace=None, stage="generation", groq_rate_limit_backoff=False):
     """
     Retry transient provider failures with bounded exponential backoff.
     Gemini may use its explicitly configured fallback; Groq never silently switches providers.
@@ -114,7 +114,12 @@ def _generate_content_resilient(client, model, contents, config, trace=None, sta
                         diagnostics=attempts_log,
                     ) from exc
                 if attempt < 3:
-                    time.sleep((2 ** (attempt - 1)) + random.uniform(0, 0.35))
+                    if provider == "Groq" and code == "429" and groq_rate_limit_backoff:
+                        # Groq TPM windows can outlast short generic retries.
+                        wait_seconds = 25 * attempt
+                    else:
+                        wait_seconds = (2 ** (attempt - 1)) + random.uniform(0, 0.35)
+                    time.sleep(wait_seconds)
                     continue
                 if candidate_index < len(candidates) - 1:
                     break
@@ -304,10 +309,12 @@ def _repair_invalid_evidence(client, model, source_text, data, api_trace=None):
 
 
 def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
-    """Second-pass model audit of evidence relevance, sufficiency and score consistency.
+    """Audit numeric indicators in small batches to stay within provider token limits.
 
-    Literal matching is checked deterministically elsewhere. This audit is an
-    automated review aid, not independent human or external verification.
+    Exact quote matching is already checked deterministically. The audit therefore
+    receives only the indicator guidance, score, quote and rationale—not the full
+    source text repeated in every request. This reduces TPM use without changing
+    the IAQF criteria or calibration rules.
     """
     indicators = data.get("indicators", {}) if isinstance(data, dict) else {}
     candidates = {}
@@ -324,64 +331,109 @@ def _audit_evidence_quality(client, model, source_text, data, api_trace=None):
     if not candidates:
         return {}, {"attempted": False, "status": "لا توجد مؤشرات رقمية للمراجعة"}
 
-    audit_prompt = (
-        "أنت مدقق جودة أدلة مستقل عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
-        "من حيث: (1) صلة الاقتباس بالمؤشر تحديدًا، (2) كفاية الاقتباس والتبرير لدعم الدرجة "
-        "الممنوحة، (3) اتساق الدرجة مع الاقتباس والتبرير. لا تتحقق من صحة الوقائع خارجيًا. "
-        "لا تعتبر مجرد تطابق الاقتباس مع النص دليلًا على صلته أو كفايته. "
-        "استخدم verdict واحدة فقط: 'قوي' أو 'جزئي' أو 'غير مرتبط' أو 'متناقض'. "
-        "'جزئي' يعني أن الاقتباس ذو صلة لكنه لا يبرر تمامًا مستوى الدرجة. "
-        "'غير مرتبط' يعني أنه لا يدعم المؤشر. 'متناقض' يعني أن الدليل أو التبرير يناقض الدرجة. "
-        "لكل مؤشر أعد calibrated_score كعدد صحيح من 1 إلى 5 أو null، وcalibration_reason يشرح القرار. "
-        "لا يجوز أن تتجاوز calibrated_score الدرجة الأصلية مطلقًا. إذا كان verdict='جزئي' فلا تتجاوز 4، "
-        "واختر الدرجة التي يبررها الشاهد فعلًا. إذا كان verdict='قوي' يجوز إبقاء الدرجة أو خفضها فقط. "
-        "إذا كان verdict='غير مرتبط' أو 'متناقض' فاجعل calibrated_score=null. "
-        "أعد JSON فقط بهذا الشكل: {\"audits\":{\"L1\":{\"verdict\":\"قوي\","
-        "\"calibrated_score\":4,\"calibration_reason\":\"...\","
-        "\"relevance\":\"...\",\"sufficiency\":\"...\",\"consistency\":\"...\"}}}. "
-        "لا تخترع شواهد ولا ترفع أي درجة.\n\n"
-        "تعريفات المؤشرات:\n" + json.dumps(INDICATOR_GUIDANCE, ensure_ascii=False)
-        + "\n\nالمؤشرات المراد تدقيقها:\n" + json.dumps(candidates, ensure_ascii=False)
-        + "\n\nالنص الأصلي:\n<<<TEXT>>>\n" + source_text + "\n<<<END TEXT>>>"
-    )
-    try:
-        response, used_model = _generate_content_resilient(
-            client, model, audit_prompt,
-            types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.0,
-            ),
-            trace=api_trace, stage="evidence_audit",
+    codes = list(candidates)
+    batch_size = 2 if getattr(client, "provider", "") == "Groq" else 4
+    batches = [codes[i:i + batch_size] for i in range(0, len(codes), batch_size)]
+    cleaned = {}
+    failed_batches = []
+    batch_log = []
+
+    # The initial evaluation and possible evidence-repair call may already have
+    # consumed most of a rolling TPM window. Allow that window to clear before audit.
+    if getattr(client, "provider", "") == "Groq":
+        time.sleep(65)
+
+    for batch_index, batch_codes in enumerate(batches):
+        batch_candidates = {code: candidates[code] for code in batch_codes}
+        audit_prompt = (
+            "أنت مدقق جودة أدلة مستقل عن مرحلة التقييم الأولية. افحص كل مؤشر مرقم أدناه "
+            "من حيث: (1) صلة الاقتباس بالمؤشر تحديدًا، (2) كفاية الاقتباس والتبرير لدعم الدرجة "
+            "الممنوحة، (3) اتساق الدرجة مع الاقتباس والتبرير. "
+            "تم التحقق برمجيًا مسبقًا من أن كل اقتباس مطابق حرفيًا للنص الأصلي؛ لا يلزم إعادة "
+            "إيراد النص الكامل. لا تتحقق من صحة الوقائع خارجيًا. "
+            "لا تعتبر مجرد تطابق الاقتباس مع النص دليلًا على صلته أو كفايته. "
+            "استخدم verdict واحدة فقط: 'قوي' أو 'جزئي' أو 'غير مرتبط' أو 'متناقض'. "
+            "'جزئي' يعني أن الاقتباس ذو صلة لكنه لا يبرر تمامًا مستوى الدرجة. "
+            "'غير مرتبط' يعني أنه لا يدعم المؤشر. 'متناقض' يعني أن الدليل أو التبرير يناقض الدرجة. "
+            "لكل مؤشر أعد calibrated_score كعدد صحيح من 1 إلى 5 أو null، وcalibration_reason يشرح القرار. "
+            "لا يجوز أن تتجاوز calibrated_score الدرجة الأصلية مطلقًا. إذا كان verdict='جزئي' فلا تتجاوز 4، "
+            "واختر الدرجة التي يبررها الشاهد فعلًا. إذا كان verdict='قوي' يجوز إبقاء الدرجة أو خفضها فقط. "
+            "إذا كان verdict='غير مرتبط' أو 'متناقض' فاجعل calibrated_score=null. "
+            "أعد JSON فقط بهذا الشكل: {\"audits\":{\"L1\":{\"verdict\":\"قوي\","
+            "\"calibrated_score\":4,\"calibration_reason\":\"...\","
+            "\"relevance\":\"...\",\"sufficiency\":\"...\",\"consistency\":\"...\"}}}. "
+            "لا تخترع شواهد ولا ترفع أي درجة.\n\n"
+            "تعريفات المؤشرات:\n"
+            + json.dumps({c: INDICATOR_GUIDANCE[c] for c in batch_codes}, ensure_ascii=False)
+            + "\n\nالمؤشرات المراد تدقيقها:\n"
+            + json.dumps(batch_candidates, ensure_ascii=False)
         )
-        parsed = _extract_json(response.text or "")
-        audits = parsed.get("audits", {}) if isinstance(parsed, dict) else {}
-        cleaned = {}
-        allowed = ("قوي", "جزئي", "غير مرتبط", "متناقض")
-        for code in candidates:
-            item = audits.get(code, {})
-            if not isinstance(item, dict):
-                item = {}
-            verdict = item.get("verdict")
-            if verdict not in allowed:
-                verdict = "تعذر التدقيق"
-            cleaned[code] = {
-                "verdict": verdict,
-                "relevance": str(item.get("relevance", "")).strip(),
-                "sufficiency": str(item.get("sufficiency", "")).strip(),
-                "consistency": str(item.get("consistency", "")).strip(),
-                "recommended_action": str(item.get("recommended_action", "")).strip(),
-                "calibrated_score": item.get("calibrated_score"),
-                "calibration_reason": str(item.get("calibration_reason", "")).strip(),
-            }
-        missing = [code for code, audit in cleaned.items() if audit["verdict"] == "تعذر التدقيق"]
-        status = "اكتمل التدقيق الآلي للأدلة" if not missing else "اكتمل جزئيًا؛ بعض المؤشرات لم تُدقّق"
-        return cleaned, {"attempted": True, "status": status, "und_audited": missing}
-    except Exception as exc:
-        return {}, {
-            "attempted": True,
-            "status": "تعذر إكمال التدقيق الآلي للأدلة",
-            "error": str(exc)[:300],
-        }
+        try:
+            response, used_model = _generate_content_resilient(
+                client, model, audit_prompt,
+                types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.0,
+                ),
+                trace=api_trace, stage="evidence_audit",
+                groq_rate_limit_backoff=True,
+            )
+            parsed = _extract_json(response.text or "")
+            audits = parsed.get("audits", {}) if isinstance(parsed, dict) else {}
+            allowed = ("قوي", "جزئي", "غير مرتبط", "متناقض")
+            batch_missing = []
+            for code in batch_codes:
+                item = audits.get(code, {})
+                if not isinstance(item, dict):
+                    item = {}
+                verdict = item.get("verdict")
+                if verdict not in allowed:
+                    verdict = "تعذر التدقيق"
+                cleaned[code] = {
+                    "verdict": verdict,
+                    "relevance": str(item.get("relevance", "")).strip(),
+                    "sufficiency": str(item.get("sufficiency", "")).strip(),
+                    "consistency": str(item.get("consistency", "")).strip(),
+                    "recommended_action": str(item.get("recommended_action", "")).strip(),
+                    "calibrated_score": item.get("calibrated_score"),
+                    "calibration_reason": str(item.get("calibration_reason", "")).strip(),
+                }
+                if verdict == "تعذر التدقيق":
+                    batch_missing.append(code)
+            if batch_missing:
+                failed_batches.append({"batch": batch_index + 1, "indicators": batch_missing, "reason": "استجابة تدقيق ناقصة"})
+            batch_log.append({"batch": batch_index + 1, "indicators": batch_codes, "status": "success"})
+        except Exception as exc:
+            failed_batches.append({
+                "batch": batch_index + 1,
+                "indicators": batch_codes,
+                "reason": str(exc)[:240],
+            })
+            for code in batch_codes:
+                cleaned[code] = {
+                    "verdict": "تعذر التدقيق",
+                    "relevance": "",
+                    "sufficiency": "",
+                    "consistency": "",
+                    "recommended_action": "",
+                    "calibrated_score": None,
+                    "calibration_reason": "تعذر إكمال تدقيق هذه الدفعة تقنيًا؛ لم تُعتمد الدرجة الأولية.",
+                }
+            batch_log.append({"batch": batch_index + 1, "indicators": batch_codes, "status": "failed"})
+        if getattr(client, "provider", "") == "Groq" and batch_index < len(batches) - 1:
+            time.sleep(15)
+
+    missing = [code for code, audit in cleaned.items() if audit["verdict"] == "تعذر التدقيق"]
+    status = "اكتمل التدقيق الآلي للأدلة" if not missing else "اكتمل جزئيًا؛ بعض المؤشرات لم تُدقّق"
+    return cleaned, {
+        "attempted": True,
+        "status": status,
+        "und_audited": missing,
+        "batches": batch_log,
+        "failed_batches": failed_batches,
+        "batch_size": batch_size,
+        "batch_count": len(batches),
+    }
 
 
 def _validate_and_calculate(data, source_text, evidence_audits=None):
@@ -554,7 +606,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
 
     return {
         "framework": "IAQF",
-        "version": "2.6.1",
+        "version": "2.6.2",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
@@ -657,7 +709,7 @@ def evaluate_text(content: str, provider: str = "Gemini"):
 
     evidence_audits, audit_meta = _audit_evidence_quality(client, primary_model_used, content, data, api_trace=api_trace)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.6.1"
+    result["version"] = "2.6.2"
     result["provider_used"] = provider
     result["api_diagnostics"] = api_trace
     result["model_used"] = primary_model_used
