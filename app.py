@@ -42,10 +42,10 @@ html, body, [data-testid="stAppViewContainer"] {
   margin-bottom: 1.35rem; box-shadow: 0 10px 30px rgba(20,55,85,.16);
   border: 1px solid rgba(255,255,255,.10);
 }
-.hero h1 {color:white; margin:0; font-size:2.35rem; font-weight:800; letter-spacing:.2px;}
-.hero p {color:#e5f2fb; margin:.32rem 0 0 0; font-size:1.02rem;}
-.hero .en {font-size:.9rem; opacity:.9; letter-spacing:.45px;}
-.hero-inner {display:flex; align-items:center; justify-content:flex-end; width:100%;}
+.hero h1 {color:#FFFFFF; margin:0; font-size:2.55rem; font-weight:900; letter-spacing:.35px; text-align:center;}\n.hero h1 .studio-accent {color:#B7F34A;}
+.hero p {color:#e5f2fb; margin:.42rem 0 0 0; font-size:1.06rem; font-weight:800; text-align:center;}
+.hero .en {font-size:.94rem; font-weight:800; opacity:1; letter-spacing:.45px; text-align:center;}
+.hero-inner {display:flex; align-items:center; justify-content:center; width:100%; text-align:center;}
 .section-kicker {color:#2878B9; font-weight:800; font-size:.92rem; margin-bottom:.2rem;}
 .section-title {font-size:1.55rem; font-weight:800; color:#163653; margin:.12rem 0 .65rem;}
 .helper {color:#64748b; font-size:1rem; line-height:1.85;}
@@ -120,8 +120,8 @@ button, [data-testid="stButton"] button,
   direction:rtl; font-family:'Cairo','Noto Sans Arabic',Tahoma,sans-serif !important;
 }
 .hero-inner {direction:rtl !important; justify-content:flex-end; width:100%;}
-.hero-inner > div {direction:rtl !important; text-align:right !important;}
-.hero h1, .hero p {text-align:right !important; direction:rtl !important;}
+.hero-inner > div {direction:rtl !important; text-align:center !important; width:100%;}
+.hero h1, .hero p {text-align:center !important;}
 .hero .en, .english, code, pre {
   direction:ltr !important; text-align:left !important; unicode-bidi:plaintext;
 }
@@ -141,7 +141,7 @@ st.markdown(f"""
 <div class="hero">
  <div class="hero-inner">
   <div>
-   <h1>IAQF Studio</h1>
+   <h1><span class="brand-iaqf">IAQF</span> <span class="studio-accent">Studio</span></h1>
    <p>منصة التقييم الذكي لجودة المحتوى العربي</p>
    <p class="en">INTEGRATED ARABIC CONTENT QUALITY FRAMEWORK</p>
   <p class="en">RESEARCH PREVIEW · VERSION {APP_VERSION}</p>
