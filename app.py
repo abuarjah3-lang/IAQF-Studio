@@ -74,7 +74,9 @@ div[data-testid="stDataFrame"] {border:1px solid #e1eaf1; border-radius:12px;}
   border-radius:9px; color:#29445b; margin:.6rem 0 1rem;}
 .footer {text-align:center; color:#8091a2; font-size:.86rem; padding-top:1.5rem;}
 @media (max-width:700px) {
- .hero {padding:1rem;}.hero h1 {font-size:1.7rem;}
+ .hero {padding:1rem;
+ .hero .en, .hero .header-en, .hero .header-version {text-align:center !important;}
+}.hero h1 {font-size:1.7rem;}
  .hero-inner {gap:0;}
  .block-container {padding-left:1rem;padding-right:1rem;}
 }
@@ -122,8 +124,23 @@ button, [data-testid="stButton"] button,
 .hero-inner {direction:rtl !important; justify-content:flex-end; width:100%;}
 .hero-inner > div {direction:rtl !important; text-align:center !important; width:100%;}
 .hero h1, .hero p {text-align:center !important;}
-.hero .en, .english, code, pre {
-  direction:ltr !important; text-align:left !important; unicode-bidi:plaintext;
+.hero .en, .hero .en p, .hero .english,
+.hero p.en, .hero .header-en,
+.hero .header-version {
+  direction:ltr !important;
+  text-align:center !important;
+  unicode-bidi:plaintext;
+  width:100%;
+  display:block;
+}
+.hero .en, .hero .header-en, .hero .header-version {
+  margin-left:auto;
+  margin-right:auto;
+}
+code, pre {
+  direction:ltr !important;
+  text-align:left !important;
+  unicode-bidi:plaintext;
 }
 
 .nav-brand {direction:rtl;text-align:right;padding:12px 10px 16px;border-bottom:1px solid #dce7f0;margin-bottom:12px;}
