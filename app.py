@@ -36,7 +36,7 @@ logo_uri = load_logo_data_uri()
 # ---------- Research guide sidebar ----------
 with st.sidebar:
     st.markdown("""
-    <div style="direction:rtl;text-align:right;padding:8px 2px 14px;">
+    <div dir="rtl" style="direction:rtl;text-align:right;padding:8px 2px 14px;">
       <div style="font-size:1.25rem;font-weight:800;color:#17496F;">IAQF Studio</div>
       <div style="font-size:.82rem;color:#64748b;">الدليل التعريفي للمنصة</div>
     </div>
@@ -191,20 +191,36 @@ div[data-testid="stDataFrame"] {border:1px solid #e1eaf1; border-radius:12px;}
 @media (max-width:700px) {
  .hero {padding:1rem;}.hero h1 {font-size:1.7rem;}
  .hero-inner {gap:13px;}
- .logo-wrap {width:105px;height:76px;flex-basis:105px;border-radius:11px;}
+ .logo-wrap {width:112px;height:82px;flex-basis:112px;border-radius:11px;}
  .block-container {padding-left:1rem;padding-right:1rem;}
 }
-[data-testid="stSidebar"] {
-  background: linear-gradient(180deg,#f5f9fc 0%,#ffffff 100%);
-  border-left: 1px solid #dce9f2;
+/* Right-to-left application layout: sidebar on the right */
+[data-testid="stAppViewContainer"] {direction:rtl;}
+[data-testid="stAppViewContainer"] > section[data-testid="stSidebar"] {
+  order:2;
+  border-left:0;
+  border-right:1px solid #dce9f2;
+  background:linear-gradient(180deg,#f5f9fc 0%,#ffffff 100%);
 }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
-  direction: rtl; text-align: right;
-}
+[data-testid="stAppViewContainer"] > .main {order:1; direction:rtl;}
+[data-testid="stSidebar"] {direction:rtl; text-align:right;}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
 [data-testid="stSidebar"] [data-testid="stRadio"] label {
-  direction: rtl; text-align: right; font-size: .96rem !important;
+  direction:rtl !important; text-align:right !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div {
+  align-items:stretch;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label > div:first-child {
+  margin-left:.55rem; margin-right:0;
 }
 [data-testid="stSidebar"] hr {border-color:#dce9f2;}
+/* Arabic-first content alignment, while preserving the English brand lockup */
+.block-container {direction:rtl; text-align:right;}
+.hero-inner {direction:ltr;}
+.hero-inner > div:last-child {direction:rtl; text-align:right;}
+[data-testid="stTextArea"] textarea {direction:rtl !important; text-align:right !important;}
 """, unsafe_allow_html=True)
 
 logo_html = f'<div class="logo-wrap"><img src="{logo_uri}" alt="IAQF logo"></div>' if logo_uri else ""
