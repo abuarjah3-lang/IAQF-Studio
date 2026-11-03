@@ -10,7 +10,7 @@ import pandas as pd
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
 APP_VERSION = "2.6.4"
-LOGO_PATH = "iaqf_logo.svg"
+LOGO_PATH = "iaqf_logo_new.png"
 
 st.set_page_config(
     page_title="IAQF Studio",
@@ -32,21 +32,27 @@ logo_uri = load_logo_data_uri()
 
 st.markdown("""
 <style>
-html, body, [class*="css"] {font-family: 'Cairo', 'Noto Sans Arabic', 'Tahoma', sans-serif;}
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"], button, input, textarea, select, label,
+[data-testid="stMarkdownContainer"], [data-testid="stMetric"] {
+  font-family: 'Cairo', 'Noto Sans Arabic', Tahoma, sans-serif !important;
+}
 .block-container {max-width: 1420px; padding-top: 1.4rem; padding-bottom: 3rem;}
 .hero {
-  background: linear-gradient(115deg,#102d4b 0%,#1d5b83 58%,#2878B9 100%);
-  padding: 1.45rem 1.8rem; border-radius: 20px; color: white;
-  margin-bottom: 1.25rem; box-shadow: 0 10px 30px rgba(20,55,85,.13);
+  background: linear-gradient(115deg,#082b50 0%,#104b78 58%,#17669b 100%);
+  padding: 1.25rem 1.8rem; border-radius: 20px; color: white;
+  margin-bottom: 1.25rem; box-shadow: 0 10px 30px rgba(20,55,85,.16);
+  border: 1px solid rgba(255,255,255,.10);
 }
 .hero h1 {color:white; margin:0; font-size:2.15rem; font-weight:800; letter-spacing:.2px;}
 .hero p {color:#e5f2fb; margin:.25rem 0 0 0;}
 .hero .en {font-size:.83rem; opacity:.88; letter-spacing:.5px;}
-.hero-inner {display:flex; align-items:center; gap:20px;}
-.logo-wrap {width:86px; height:86px; flex:0 0 86px; background:#fff;
-  border-radius:19px; display:flex; align-items:center; justify-content:center;
-  padding:7px; box-shadow:0 5px 16px rgba(0,0,0,.13);}
-.logo-wrap img {width:100%; height:100%; object-fit:contain;}
+.hero-inner {display:flex; align-items:center; gap:24px;}
+.logo-wrap {width:142px; height:98px; flex:0 0 142px; overflow:hidden;
+  border-radius:15px; display:flex; align-items:center; justify-content:center;
+  background:#0b4778; box-shadow:0 5px 16px rgba(0,0,0,.16);
+  border:1px solid rgba(255,255,255,.12);}
+.logo-wrap img {width:100%; height:100%; object-fit:cover;}
 .section-kicker {color:#2878B9; font-weight:800; font-size:.82rem; margin-bottom:.15rem;}
 .section-title {font-size:1.35rem; font-weight:800; color:#163653; margin:.1rem 0 .55rem;}
 .helper {color:#64748b; font-size:.9rem;}
@@ -57,14 +63,21 @@ div.stButton > button[kind="primary"] {background:linear-gradient(100deg,#2878B9
   border:0; border-radius:11px; font-weight:700; min-height:3rem;}
 div.stButton > button {border-radius:11px; min-height:2.7rem;}
 div[data-testid="stDownloadButton"] button {border-radius:11px; font-weight:700; min-height:3rem;}
-div[data-testid="stTextArea"] textarea {border-radius:13px; border:1px solid #cbd9e5;}
+div[data-testid="stTextArea"] textarea {
+  border-radius:13px; border:1px solid #cbd9e5;
+  font-family:'Cairo','Noto Sans Arabic',Tahoma,sans-serif !important;
+  direction:rtl; text-align:right; line-height:1.9; font-size:1rem;
+}
+div[data-testid="stRadio"] label, div[data-testid="stCaptionContainer"],
+div[data-testid="stTextArea"] label {font-family:'Cairo','Noto Sans Arabic',Tahoma,sans-serif !important;}
 div[data-testid="stDataFrame"] {border:1px solid #e1eaf1; border-radius:12px;}
 .status-note {background:#f3f8fc; border-right:4px solid #2878B9; padding:12px 15px;
   border-radius:9px; color:#29445b; margin:.6rem 0 1rem;}
 .footer {text-align:center; color:#8091a2; font-size:.78rem; padding-top:1.5rem;}
 @media (max-width:700px) {
- .hero {padding:1.1rem;}.hero h1 {font-size:1.5rem;}
- .logo-wrap {width:64px;height:64px;flex-basis:64px;}
+ .hero {padding:1rem;}.hero h1 {font-size:1.5rem;}
+ .hero-inner {gap:13px;}
+ .logo-wrap {width:94px;height:70px;flex-basis:94px;border-radius:11px;}
  .block-container {padding-left:1rem;padding-right:1rem;}
 }
 </style>
