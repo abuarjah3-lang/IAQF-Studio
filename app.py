@@ -23,8 +23,10 @@ st.set_page_config(
 def load_logo_data_uri():
     try:
         with open(LOGO_PATH, "rb") as logo_file:
-            encoded = base64.b64encode(logo_file.read()).decode("ascii")
-        return f"data:image/svg+xml;base64,{encoded}"
+            logo_bytes = logo_file.read()
+        mime_type = "image/png" if LOGO_PATH.lower().endswith(".png") else "image/svg+xml"
+        encoded = base64.b64encode(logo_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
     except OSError:
         return ""
 
