@@ -16,7 +16,7 @@ st.set_page_config(
     page_title="IAQF Studio",
     page_icon="📘",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ---------- Visual identity ----------
@@ -32,6 +32,101 @@ def load_logo_data_uri():
 
 logo_uri = load_logo_data_uri()
 
+
+# ---------- Research guide sidebar ----------
+with st.sidebar:
+    st.markdown("""
+    <div style="direction:rtl;text-align:right;padding:8px 2px 14px;">
+      <div style="font-size:1.25rem;font-weight:800;color:#17496F;">IAQF Studio</div>
+      <div style="font-size:.82rem;color:#64748b;">الدليل التعريفي للمنصة</div>
+    </div>
+    """, unsafe_allow_html=True)
+    sidebar_section = st.radio(
+        "استكشف المنصة",
+        options=[
+            "نبذة عن المنصة",
+            "ماذا تقيّم المنصة؟",
+            "منهجية التقييم",
+            "طريقة الاستخدام",
+            "الخصوصية وحدود التقييم",
+            "عن الإصدار",
+        ],
+        label_visibility="collapsed",
+    )
+    st.markdown("---")
+    if sidebar_section == "نبذة عن المنصة":
+        st.markdown("""
+        ### نبذة عن IAQF
+        منصة بحثية تجريبية لتحليل جودة المحتوى العربي بمساعدة الذكاء الاصطناعي، وفق إطار يضم أربعة أبعاد و27 مؤشرًا.
+
+        تقدم قراءة منظمة للنص مدعومة بالشواهد والتبريرات والتوصيات، لمساندة المراجعة البشرية.
+        """)
+    elif sidebar_section == "ماذا تقيّم المنصة؟":
+        st.markdown("""
+        ### أبعاد التقييم الأربعة
+        **L — الجودة اللغوية**
+        سلامة اللغة ووضوحها واتساقها.
+
+        **E — الجودة المعرفية**
+        جودة المحتوى المعرفي واتساقه ومدى دعم أحكامه بالشواهد المتاحة.
+
+        **C — الجودة الثقافية**
+        مراعاة السياق الثقافي والتمثيل والحساسية الثقافية.
+
+        **H — الجودة الأخلاقية**
+        المسؤولية والإنصاف والخصوصية والشفافية واحترام الحقوق.
+
+        يتضمن الإطار 27 مؤشرًا موزعة على الأبعاد الأربعة.
+        """)
+    elif sidebar_section == "منهجية التقييم":
+        st.markdown("""
+        ### منهجية التقييم
+        - مقياس تقدير من **1 إلى 5**.
+        - إسناد الأحكام إلى شواهد نصية وتبريرات.
+        - مراجعة آلية لاحقة لجودة الأدلة واتساق الدرجات.
+        - استخدام **NA** عندما لا ينطبق المؤشر أو لا تتوافر أدلة كافية للحكم.
+        - الدرجة الأولية غير المعايرة ليست درجة نهائية.
+
+        المراجعة والمعايرة آليتان وليستا تحكيمًا بشريًا مستقلًا.
+        """)
+    elif sidebar_section == "طريقة الاستخدام":
+        st.markdown("""
+        ### طريقة الاستخدام
+        1. اختر مزود الذكاء الاصطناعي.
+        2. الصق النص المراد تقييمه.
+        3. اضغط **ابدأ التقييم الشامل**.
+        4. راجع النتيجة والأبعاد والتغطية والمؤشرات والشواهد.
+        5. نزّل التقرير بصيغة Word أو JSON.
+
+        استخدم نصًا تملك حق مشاركته وخاليًا من البيانات الشخصية أو السرية.
+        """)
+    elif sidebar_section == "الخصوصية وحدود التقييم":
+        st.markdown("""
+        ### الخصوصية وحدود التقييم
+        - يُرسل النص إلى مزود الذكاء الاصطناعي المختار لتنفيذ التقييم.
+        - لا تُدخل بيانات شخصية أو سرية أو نصوصًا لا تملك تصريحًا بمشاركتها.
+        - لا ينفذ التطبيق تحققًا خارجيًا مستقلًا من الوقائع أو المراجع أو الأصالة.
+        - النتائج استرشادية وتحتاج إلى مراجعة بشرية قبل اعتمادها.
+
+        **الحالة العلمية:** نموذج بحثي تجريبي، وليس أداة مقننة أو اعتمادًا نهائيًا للإطار.
+        """)
+    else:
+        st.markdown(f"""
+        ### معلومات الإصدار
+        **اسم المنصة:** IAQF Studio
+
+        **الإصدار:** {APP_VERSION}
+
+        **الإطار:** Integrated Arabic Content Quality Framework
+
+        **النطاق:** 4 أبعاد · 27 مؤشرًا
+
+        نسخة بحثية تجريبية — Research Preview
+        """)
+    st.markdown("---")
+    st.caption("IAQF Studio · Research Preview")
+
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap');
@@ -39,50 +134,77 @@ html, body, [class*="css"], button, input, textarea, select, label,
 [data-testid="stMarkdownContainer"], [data-testid="stMetric"] {
   font-family: 'Cairo', 'Noto Sans Arabic', Tahoma, sans-serif !important;
 }
-.block-container {max-width: 1420px; padding-top: 1.4rem; padding-bottom: 3rem;}
+html, body, [data-testid="stAppViewContainer"] {
+  font-size: 16px !important;
+}
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stWidgetLabel"] p,
+[data-testid="stRadio"] label,
+[data-testid="stCaptionContainer"] {
+  font-size: 1rem !important;
+  line-height: 1.8 !important;
+}
+.block-container {max-width: 1420px; padding-top: 1.5rem; padding-bottom: 3rem;}
 .hero {
   background: linear-gradient(115deg,#082b50 0%,#104b78 58%,#17669b 100%);
-  padding: 1.25rem 1.8rem; border-radius: 20px; color: white;
-  margin-bottom: 1.25rem; box-shadow: 0 10px 30px rgba(20,55,85,.16);
+  padding: 1.35rem 1.8rem; border-radius: 20px; color: white;
+  margin-bottom: 1.35rem; box-shadow: 0 10px 30px rgba(20,55,85,.16);
   border: 1px solid rgba(255,255,255,.10);
 }
-.hero h1 {color:white; margin:0; font-size:2.15rem; font-weight:800; letter-spacing:.2px;}
-.hero p {color:#e5f2fb; margin:.25rem 0 0 0;}
-.hero .en {font-size:.83rem; opacity:.88; letter-spacing:.5px;}
+.hero h1 {color:white; margin:0; font-size:2.35rem; font-weight:800; letter-spacing:.2px;}
+.hero p {color:#e5f2fb; margin:.32rem 0 0 0; font-size:1.02rem;}
+.hero .en {font-size:.9rem; opacity:.9; letter-spacing:.45px;}
 .hero-inner {display:flex; align-items:center; gap:24px;}
-.logo-wrap {width:142px; height:98px; flex:0 0 142px; overflow:hidden;
+.logo-wrap {width:150px; height:100px; flex:0 0 150px; overflow:hidden;
   border-radius:15px; display:flex; align-items:center; justify-content:center;
   background:#0b4778; box-shadow:0 5px 16px rgba(0,0,0,.16);
   border:1px solid rgba(255,255,255,.12);}
-.logo-wrap img {width:100%; height:100%; object-fit:cover;}
-.section-kicker {color:#2878B9; font-weight:800; font-size:.82rem; margin-bottom:.15rem;}
-.section-title {font-size:1.35rem; font-weight:800; color:#163653; margin:.1rem 0 .55rem;}
-.helper {color:#64748b; font-size:.9rem;}
+.logo-wrap img {width:100%; height:100%; object-fit:contain; padding:3px;}
+.section-kicker {color:#2878B9; font-weight:800; font-size:.92rem; margin-bottom:.2rem;}
+.section-title {font-size:1.55rem; font-weight:800; color:#163653; margin:.12rem 0 .65rem;}
+.helper {color:#64748b; font-size:1rem; line-height:1.85;}
 div[data-testid="stMetric"] {background:#f5f9fc; border:1px solid #dce9f2;
   padding:14px 16px; border-radius:14px;}
-div[data-testid="stMetricLabel"] {font-weight:700;}
+div[data-testid="stMetricLabel"] {font-weight:700; font-size:.95rem;}
 div.stButton > button[kind="primary"] {background:linear-gradient(100deg,#2878B9,#1c5c8a);
-  border:0; border-radius:11px; font-weight:700; min-height:3rem;}
-div.stButton > button {border-radius:11px; min-height:2.7rem;}
-div[data-testid="stDownloadButton"] button {border-radius:11px; font-weight:700; min-height:3rem;}
+  border:0; border-radius:11px; font-weight:700; min-height:3.1rem; font-size:1rem;}
+div.stButton > button {border-radius:11px; min-height:2.9rem; font-size:1rem;}
+div[data-testid="stDownloadButton"] button {border-radius:11px; font-weight:700; min-height:3rem; font-size:1rem;}
 div[data-testid="stTextArea"] textarea {
   border-radius:13px; border:1px solid #cbd9e5;
   font-family:'Cairo','Noto Sans Arabic',Tahoma,sans-serif !important;
-  direction:rtl; text-align:right; line-height:1.9; font-size:1rem;
+  direction:rtl; text-align:right; line-height:2; font-size:1.08rem !important;
+  padding:1rem 1.1rem;
 }
-div[data-testid="stRadio"] label, div[data-testid="stCaptionContainer"],
-div[data-testid="stTextArea"] label {font-family:'Cairo','Noto Sans Arabic',Tahoma,sans-serif !important;}
+div[data-testid="stRadio"] label,
+div[data-testid="stCaptionContainer"],
+div[data-testid="stTextArea"] label,
+div[data-testid="stSelectbox"] label {
+  font-family:'Cairo','Noto Sans Arabic',Tahoma,sans-serif !important;
+  font-size:1rem !important;
+}
 div[data-testid="stDataFrame"] {border:1px solid #e1eaf1; border-radius:12px;}
 .status-note {background:#f3f8fc; border-right:4px solid #2878B9; padding:12px 15px;
   border-radius:9px; color:#29445b; margin:.6rem 0 1rem;}
-.footer {text-align:center; color:#8091a2; font-size:.78rem; padding-top:1.5rem;}
+.footer {text-align:center; color:#8091a2; font-size:.86rem; padding-top:1.5rem;}
 @media (max-width:700px) {
- .hero {padding:1rem;}.hero h1 {font-size:1.5rem;}
+ .hero {padding:1rem;}.hero h1 {font-size:1.7rem;}
  .hero-inner {gap:13px;}
- .logo-wrap {width:94px;height:70px;flex-basis:94px;border-radius:11px;}
+ .logo-wrap {width:105px;height:76px;flex-basis:105px;border-radius:11px;}
  .block-container {padding-left:1rem;padding-right:1rem;}
 }
-</style>
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg,#f5f9fc 0%,#ffffff 100%);
+  border-left: 1px solid #dce9f2;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
+  direction: rtl; text-align: right;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+  direction: rtl; text-align: right; font-size: .96rem !important;
+}
+[data-testid="stSidebar"] hr {border-color:#dce9f2;}
 """, unsafe_allow_html=True)
 
 logo_html = f'<div class="logo-wrap"><img src="{logo_uri}" alt="IAQF logo"></div>' if logo_uri else ""
