@@ -225,7 +225,7 @@ _HEADER_PNG = "iVBORw0KGgoAAAANSUhEUgAACHwAAALUCAIAAAD8byAGAABVeWNhQlgAAFV5anVtY
 st.markdown(
     f'<div style="width:100%; display:flex; justify-content:center; margin:0 auto 18px auto;">'
     f'<img src="data:image/png;base64,{_HEADER_PNG}" '
-    f'style="display:block; width:90%; max-width:1200px; height:auto; border-radius:16px;" '
+    f'style="display:block; width:100%; max-width:none; height:auto; border-radius:0;" '
     f'alt="IAQF Studio header"></div>',
     unsafe_allow_html=True,
 )
