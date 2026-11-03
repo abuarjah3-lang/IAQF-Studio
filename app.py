@@ -9,7 +9,7 @@ import pandas as pd
 
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
-APP_VERSION = "2.6.2"
+APP_VERSION = "2.6.3"
 LOGO_PATH = "iaqf_logo.svg"
 
 st.set_page_config(
@@ -277,6 +277,7 @@ def build_word_report(report):
     p.add_run(f"المؤشرات القابلة للتقييم: {coverage.get('assessable', 0)} / 27")
     p.add_run(f"    |    مؤشرات NA: {coverage.get('not_applicable', 0)}")
     p.add_run(f"    |    درجات أولية غير معايرة: {coverage.get('uncalibrated', 0)}")
+    p.add_run(f"    |    مؤشرات لم يكتمل تقييمها: {coverage.get('incomplete', 0)}")
     set_rtl(p)
     if report.get("overall_note"):
         p = doc.add_paragraph(report["overall_note"])
@@ -423,11 +424,12 @@ if result:
 
     overall = result.get("overall_score")
     coverage = result.get("coverage", {})
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("النتيجة الإجمالية", f"{overall:.2f} / 5" if isinstance(overall, (int, float)) else "غير متاحة")
     m2.metric("المؤشرات القابلة للتقييم", f'{coverage.get("assessable", 0)} / 27')
     m3.metric("المؤشرات NA", str(coverage.get("not_applicable", 0)))
     m4.metric("درجات أولية غير معايرة", str(coverage.get("uncalibrated", 0)))
+    m5.metric("تقييم أولي غير مكتمل", str(coverage.get("incomplete", 0)))
     if not isinstance(overall, (int, float)):
         st.warning(result.get("overall_note", "لم تُحسب نتيجة إجمالية؛ راجع تغطية الأبعاد الأربعة."))
 
@@ -440,6 +442,8 @@ if result:
         col.caption(f"التغطية المعايرة: {dim.get('coverage', '—')}")
         if dim.get("uncalibrated", 0):
             col.caption(f"درجات أولية غير معايرة: {dim.get('uncalibrated')}")
+        if dim.get("incomplete", 0):
+            col.caption(f"تقييم أولي غير مكتمل: {dim.get('incomplete')}")
 
     st.subheader("تفصيل المؤشرات الـ27")
     rows = []

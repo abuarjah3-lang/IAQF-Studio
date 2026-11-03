@@ -444,9 +444,38 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
     na_count = 0
     uncalibrated_count = 0
     uncalibrated_by_dimension = {key: 0 for key in DIMENSIONS}
+    incomplete_count = 0
+    incomplete_by_dimension = {key: 0 for key in DIMENSIONS}
     dim_values = {key: [] for key in DIMENSIONS}
 
     for code, meta in INDICATORS.items():
+        # Missing key means the model did not return this indicator at all.
+        # It is a technical incompleteness, never a substantive NA judgment.
+        if code not in indicators:
+            incomplete_count += 1
+            incomplete_by_dimension[meta["dimension"]] += 1
+            normalized[code] = {
+                "score": None,
+                "original_score": None,
+                "calibrated_score": None,
+                "score_adjusted": False,
+                "calibration_reason": "لم يرد المؤشر في استجابة التقييم الأولي؛ لم يصدر حكم موضوعي عليه.",
+                "calibration_status": "لم يكتمل التقييم الأولي",
+                "result_status": "لم يكتمل التقييم الأولي",
+                "evidence": "لم تُستلم بيانات هذا المؤشر من النموذج.",
+                "rationale": "حالة تقنية غير مكتملة؛ لا تعني أن المؤشر غير منطبق أو أن النص أخفق فيه.",
+                "confidence": "منخفض",
+                "na_reason": None,
+                "evidence_status": "غير متاح",
+                "evidence_relevance": "",
+                "evidence_sufficiency": "",
+                "score_consistency": "",
+                "evidence_quality_verdict": "لم يُقيّم",
+                "evidence_basis": "غير متاح",
+                "external_verification": False,
+                "verification_note": "لم تصل استجابة التقييم الأولي لهذا المؤشر.",
+            }
+            continue
         item = indicators.get(code, {})
         if not isinstance(item, dict):
             item = {}
@@ -593,6 +622,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             "coverage": f"{len(vals)}/{denom} ({coverage_pct}%)",
             "assessable": len(vals),
             "uncalibrated": uncalibrated_by_dimension[key],
+            "incomplete": incomplete_by_dimension[key],
             "total": denom,
         }
 
@@ -606,7 +636,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
 
     return {
         "framework": "IAQF",
-        "version": "2.6.2",
+        "version": "2.6.3",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
@@ -615,6 +645,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             "assessable": assessable,
             "not_applicable": na_count,
             "uncalibrated": uncalibrated_count,
+            "incomplete": incomplete_count,
             "total": 27,
         },
         "external_verification_performed": False,
@@ -643,58 +674,153 @@ def evaluate_text(content: str, provider: str = "Gemini"):
         model = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
         client = genai.Client(api_key=api_key)
         client.provider = "Gemini"
-    indicator_spec = {
-        code: {
-            "name": meta["name"],
-            "dimension": meta["dimension"],
-            "evaluation_guidance": INDICATOR_GUIDANCE[code],
-        }
-        for code, meta in INDICATORS.items()
-    }
-    output_schema = {
-        "indicators": {
-            "L1": {
-                "score": "integer 1..5 or null",
-                "evidence": "verbatim short quote from input, or explanation if NA",
-                "rationale": "specific indicator-based explanation",
-                "confidence": "مرتفع أو متوسط أو منخفض",
-                "na_reason": "غير منطبق أو نقص سياق أو تعذر الحكم أو null",
-                "evidence_basis": "إحدى الفئات الخمس المحددة في التعليمات",
-                "external_verification": "false",
-                "verification_note": "ما لم يتم التحقق منه خارجيًا",
-            }
-        },
-        "strengths": ["..."],
-        "issues": ["..."],
-        "recommendations": ["..."],
-        "limitations": ["..."],
-    }
-    prompt = (
-        SYSTEM_INSTRUCTIONS
-        + "\nالمؤشرات وتعريفاتها التشغيلية:\n"
-        + json.dumps(indicator_spec, ensure_ascii=False)
-        + "\n\nشكل JSON المطلوب (كرّر بنية المؤشر لكل الرموز الـ27):\n"
-        + json.dumps(output_schema, ensure_ascii=False)
-        + "\n\nالنص المراد تقييمه حرفيًا بين العلامتين:\n<<<TEXT>>>\n"
-        + content
-        + "\n<<<END TEXT>>>"
-    )
 
     api_trace = []
-    try:
-        response, primary_model_used = _generate_content_resilient(
-            client, model, prompt,
+    merged_indicators = {}
+    merged_data = {
+        "indicators": merged_indicators,
+        "strengths": [],
+        "issues": [],
+        "recommendations": [],
+        "limitations": [],
+    }
+    primary_model_used = model
+    initial_batches = []
+    incomplete_after_retry = []
+
+    def build_initial_prompt(codes):
+        indicator_spec = {
+            code: {
+                "name": INDICATORS[code]["name"],
+                "dimension": INDICATORS[code]["dimension"],
+                "evaluation_guidance": INDICATOR_GUIDANCE[code],
+            }
+            for code in codes
+        }
+        output_schema = {
+            "indicators": {
+                code: {
+                    "score": "integer 1..5 or null",
+                    "evidence": "verbatim short quote from input, or explanation if NA",
+                    "rationale": "specific indicator-based explanation",
+                    "confidence": "مرتفع أو متوسط أو منخفض",
+                    "na_reason": "غير منطبق أو نقص سياق أو تعذر الحكم أو null",
+                    "evidence_basis": "إحدى الفئات الخمس المحددة في التعليمات",
+                    "external_verification": "false",
+                    "verification_note": "ما لم يتم التحقق منه خارجيًا",
+                }
+                for code in codes
+            },
+            "strengths": ["..."],
+            "issues": ["..."],
+            "recommendations": ["..."],
+            "limitations": ["..."],
+        }
+        return (
+            SYSTEM_INSTRUCTIONS
+            + "\nالمؤشرات المطلوب تقييمها في هذه الدفعة فقط:\n"
+            + json.dumps(indicator_spec, ensure_ascii=False)
+            + "\n\nأعد كل الرموز المطلوبة أدناه دون إسقاط أي رمز. "
+              "إذا لم تستطع الحكم على مؤشر، أعده صراحةً مع score=null وna_reason مناسب؛ "
+              "لا تحذف مفتاح المؤشر من JSON.\n"
+            + json.dumps(output_schema, ensure_ascii=False)
+            + "\n\nالنص المراد تقييمه حرفيًا بين العلامتين:\n<<<TEXT>>>\n"
+            + content
+            + "\n<<<END TEXT>>>"
+        )
+
+    if provider == "Groq":
+        # Four dimension-specific requests keep each completion comfortably smaller
+        # than one 27-indicator response and reduce output truncation on TPM-limited plans.
+        code_batches = [
+            [c for c, m in INDICATORS.items() if m["dimension"] == dim]
+            for dim in ("L", "E", "C", "H")
+        ]
+    else:
+        code_batches = [list(INDICATORS.keys())]
+
+    last_groq_request = None
+
+    def request_initial(codes, stage):
+        nonlocal primary_model_used, last_groq_request
+        if provider == "Groq" and last_groq_request is not None:
+            # The free-tier TPM window is rolling; wait before the next generation call.
+            elapsed = time.monotonic() - last_groq_request
+            if elapsed < 65:
+                time.sleep(65 - elapsed)
+        response, used_model = _generate_content_resilient(
+            client, model, build_initial_prompt(codes),
             types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.0,
             ),
-            trace=api_trace, stage="initial_evaluation",
+            trace=api_trace, stage=stage,
+            groq_rate_limit_backoff=(provider == "Groq"),
         )
+        if provider == "Groq":
+            last_groq_request = time.monotonic()
+        primary_model_used = used_model
+        return _extract_json(response.text or "")
+
+    try:
+        for batch_index, codes in enumerate(code_batches, start=1):
+            stage = "initial_evaluation" if provider != "Groq" else f"initial_evaluation_{('L','E','C','H')[batch_index-1]}"
+            batch_data = request_initial(codes, stage)
+            batch_items = batch_data.get("indicators", {}) if isinstance(batch_data, dict) else {}
+            if not isinstance(batch_items, dict):
+                batch_items = {}
+            received = [code for code in codes if isinstance(batch_items.get(code), dict)]
+            missing = [code for code in codes if code not in received]
+            completion_status = "complete"
+
+            # One targeted completion attempt for omitted keys only. Never replace
+            # valid indicator results already received in the first response.
+            if missing:
+                completion_status = "completion_requested"
+                try:
+                    completion_data = request_initial(missing, f"initial_completion_{batch_index}")
+                    completion_items = completion_data.get("indicators", {}) if isinstance(completion_data, dict) else {}
+                    if isinstance(completion_items, dict):
+                        for code in missing:
+                            if isinstance(completion_items.get(code), dict):
+                                batch_items[code] = completion_items[code]
+                    missing = [code for code in missing if not isinstance(batch_items.get(code), dict)]
+                    completion_status = "completed" if not missing else "still_incomplete"
+                except Exception as completion_exc:
+                    completion_status = "completion_failed"
+                    missing = list(missing)
+                    api_trace.append({
+                        "stage": f"initial_completion_{batch_index}",
+                        "provider": provider,
+                        "model": primary_model_used,
+                        "attempt": 1,
+                        "status": "failed",
+                        "error_code": _api_error_code(completion_exc) or "completion_error",
+                    })
+
+            for code in codes:
+                if isinstance(batch_items.get(code), dict):
+                    merged_indicators[code] = batch_items[code]
+            incomplete_after_retry.extend(missing)
+            initial_batches.append({
+                "batch": batch_index,
+                "indicators": codes,
+                "received": [c for c in codes if c in merged_indicators],
+                "missing_after_retry": missing,
+                "status": completion_status,
+            })
+
+            # Keep summary lists from the first returned batch only; indicator-level
+            # evidence and scores are merged from every dimension batch.
+            if batch_index == 1 and isinstance(batch_data, dict):
+                for key in ("strengths", "issues", "recommendations", "limitations"):
+                    if isinstance(batch_data.get(key), list):
+                        merged_data[key] = batch_data[key]
     except ProviderRequestError as exc:
-        # Attach the complete trace accumulated by this evaluation attempt.
         exc.diagnostics = list(api_trace)
         raise
-    data = _extract_json(response.text or "")
+
+    data = merged_data
     data, repair_attempted = _repair_invalid_evidence(
         client, primary_model_used, content, data, api_trace=api_trace
     )
@@ -709,10 +835,17 @@ def evaluate_text(content: str, provider: str = "Gemini"):
 
     evidence_audits, audit_meta = _audit_evidence_quality(client, primary_model_used, content, data, api_trace=api_trace)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.6.2"
+    result["version"] = "2.6.3"
     result["provider_used"] = provider
     result["api_diagnostics"] = api_trace
     result["model_used"] = primary_model_used
+    result["initial_evaluation"] = {
+        "status": "اكتمل التقييم الأولي لجميع المؤشرات" if not incomplete_after_retry else "لم يكتمل التقييم الأولي لبعض المؤشرات",
+        "batches": initial_batches,
+        "missing_after_retry": incomplete_after_retry,
+        "requested_indicators": 27,
+        "received_indicators": len(merged_indicators),
+    }
     result["external_verification_performed"] = False
     result["verification_scope"] = (
         "تحليل النص والشواهد المقدمة ومراجعة آلية داخلية لصلتها وكفايتها واتساقها؛ "
@@ -741,3 +874,4 @@ def evaluate_text(content: str, provider: str = "Gemini"):
         "الجزئية أو غير المدققة قبل اعتماد النتائج."
     )
     return result
+
