@@ -20,7 +20,11 @@ class GroqModelsAdapter:
     def generate_content(self, model, contents, config=None):
         temperature = getattr(config, "temperature", 0.0) if config is not None else 0.0
         response_format = {"type": "json_object"} if getattr(config, "response_mime_type", "") == "application/json" else None
-        kwargs = {"model": model, "messages": [{"role": "user", "content": contents}]}
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": contents}],
+            "temperature": temperature,
+        }
         if response_format:
             kwargs["response_format"] = response_format
         response = self.client.chat.completions.create(**kwargs)
@@ -386,6 +390,8 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
     normalized = {}
     assessable = 0
     na_count = 0
+    uncalibrated_count = 0
+    uncalibrated_by_dimension = {key: 0 for key in DIMENSIONS}
     dim_values = {key: [] for key in DIMENSIONS}
 
     for code, meta in INDICATORS.items():
@@ -485,8 +491,9 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             if dim_values[meta["dimension"]]:
                 dim_values[meta["dimension"]].pop()
             assessable -= 1
-            na_count += 1
-            na_reason = "تعذر الحكم"
+            uncalibrated_count += 1
+            uncalibrated_by_dimension[meta["dimension"]] += 1
+            na_reason = None
             score = None
             confidence = "منخفض"
 
@@ -498,7 +505,12 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             "calibration_reason": calibration_reason,
             "calibration_status": (
                 "اكتملت" if verdict in ("قوي", "جزئي", "غير مرتبط", "متناقض")
-                else ("لم تُعايَر" if original_score is not None else "غير منطبق")
+                else ("تعذر التدقيق تقنيًا/آليًا" if original_score is not None else "غير منطبق")
+            ),
+            "result_status": (
+                "درجة معايرة معتمدة" if score is not None
+                else ("درجة أولية غير معايرة" if original_score is not None and verdict not in ("غير مرتبط", "متناقض")
+                      else "NA / تعذر الحكم")
             ),
             "evidence": evidence or "لا يوجد شاهد نصي كافٍ",
             "rationale": rationale or "لم يقدم النموذج تبريرًا محددًا.",
@@ -528,6 +540,7 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
             "score": score,
             "coverage": f"{len(vals)}/{denom} ({coverage_pct}%)",
             "assessable": len(vals),
+            "uncalibrated": uncalibrated_by_dimension[key],
             "total": denom,
         }
 
@@ -541,12 +554,17 @@ def _validate_and_calculate(data, source_text, evidence_audits=None):
 
     return {
         "framework": "IAQF",
-        "version": "2.4.1.1-demo",
+        "version": "2.6.1",
         "indicators": normalized,
         "dimensions": dimensions,
         "overall_score": overall,
         "overall_note": note,
-        "coverage": {"assessable": assessable, "not_applicable": na_count, "total": 27},
+        "coverage": {
+            "assessable": assessable,
+            "not_applicable": na_count,
+            "uncalibrated": uncalibrated_count,
+            "total": 27,
+        },
         "external_verification_performed": False,
         "verification_scope": "تحليل النص والشواهد المقدمة فقط؛ لا يتضمن بحثًا خارجيًا أو فحصًا للمصادر الأصلية أو كشفًا مستقلًا للانتحال.",
         "strengths": clean_list(data.get("strengths", [])),
@@ -639,7 +657,7 @@ def evaluate_text(content: str, provider: str = "Gemini"):
 
     evidence_audits, audit_meta = _audit_evidence_quality(client, primary_model_used, content, data, api_trace=api_trace)
     result = _validate_and_calculate(data, content, evidence_audits)
-    result["version"] = "2.6.0"
+    result["version"] = "2.6.1"
     result["provider_used"] = provider
     result["api_diagnostics"] = api_trace
     result["model_used"] = primary_model_used
@@ -659,7 +677,7 @@ def evaluate_text(content: str, provider: str = "Gemini"):
     result["score_calibration"] = {
         "status": "اكتملت المعايرة" if audit_meta.get("status") == "اكتمل التدقيق الآلي للأدلة" and not audit_meta.get("error") else "لم تكتمل المعايرة بالكامل",
         "audited": sum(1 for x in calibrated_items if x.get("calibration_status") == "اكتملت"),
-        "not_calibrated": sum(1 for x in calibrated_items if x.get("calibration_status") == "لم تُعايَر"),
+        "not_calibrated": sum(1 for x in calibrated_items if x.get("calibration_status") == "تعذر التدقيق تقنيًا/آليًا"),
         "adjusted": sum(1 for x in calibrated_items if x.get("score_adjusted") and x.get("calibrated_score") is not None),
         "reduced": sum(1 for x in calibrated_items if x.get("score_adjusted") and x.get("calibrated_score") is not None and x.get("calibrated_score") < x.get("original_score")),
         "converted_to_NA": sum(1 for x in result.get("indicators", {}).values() if x.get("original_score") is not None and x.get("score") is None),

@@ -9,7 +9,7 @@ import pandas as pd
 
 from iaqf_engine import evaluate_text, DIMENSIONS, INDICATORS
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.6.1"
 LOGO_PATH = "iaqf_logo.svg"
 
 st.set_page_config(
@@ -276,6 +276,7 @@ def build_word_report(report):
     coverage = report.get("coverage", {})
     p.add_run(f"المؤشرات القابلة للتقييم: {coverage.get('assessable', 0)} / 27")
     p.add_run(f"    |    مؤشرات NA: {coverage.get('not_applicable', 0)}")
+    p.add_run(f"    |    درجات أولية غير معايرة: {coverage.get('uncalibrated', 0)}")
     set_rtl(p)
     if report.get("overall_note"):
         p = doc.add_paragraph(report["overall_note"])
@@ -418,13 +419,15 @@ if result:
             st.caption("السجل يوضح المرحلة والنموذج وعدد المحاولات وحالة كل طلب، دون عرض مفتاح API أو النص المرسل.")
     st.info("النتائج آلية استرشادية؛ ينبغي مراجعتها بشريًا قبل استخدامها في قرارات بحثية أو نشرية.")
     st.warning("حدود التحقق: مراجعة صلة الأدلة وكفايتها واتساقها آلية وليست مراجعة بشرية مستقلة؛ ولا يجري التطبيق تحققًا خارجيًا من المراجع أو الوقائع أو الأصالة أو بيانات سياق الإنتاج.")
+    st.caption("تمييز منهجي: المؤشر NA يختلف عن الدرجة الأولية غير المعايرة؛ تعذّر التدقيق لا يُعد مخالفة ولا يُحتسب ضمن مؤشرات NA.")
 
     overall = result.get("overall_score")
     coverage = result.get("coverage", {})
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("النتيجة الإجمالية", f"{overall:.2f} / 5" if isinstance(overall, (int, float)) else "غير متاحة")
     m2.metric("المؤشرات القابلة للتقييم", f'{coverage.get("assessable", 0)} / 27')
     m3.metric("المؤشرات NA", str(coverage.get("not_applicable", 0)))
+    m4.metric("درجات أولية غير معايرة", str(coverage.get("uncalibrated", 0)))
     if not isinstance(overall, (int, float)):
         st.warning(result.get("overall_note", "لم تُحسب نتيجة إجمالية؛ راجع تغطية الأبعاد الأربعة."))
 
@@ -434,7 +437,9 @@ if result:
         dim = result.get("dimensions", {}).get(key, {})
         score = dim.get("score")
         col.metric(label, f"{score:.2f} / 5" if isinstance(score, (int, float)) else "غير متاح")
-        col.caption(f"التغطية: {dim.get('coverage', '—')}")
+        col.caption(f"التغطية المعايرة: {dim.get('coverage', '—')}")
+        if dim.get("uncalibrated", 0):
+            col.caption(f"درجات أولية غير معايرة: {dim.get('uncalibrated')}")
 
     st.subheader("تفصيل المؤشرات الـ27")
     rows = []
@@ -445,7 +450,7 @@ if result:
             "المؤشر": meta["name"],
             "الدرجة الأصلية": item.get("original_score", item.get("score", "NA")),
             "الدرجة المعايرة": item.get("calibrated_score") if item.get("calibrated_score") is not None else ("لم تتم المعايرة" if item.get("original_score") is not None else "NA"),
-            "حالة التعديل": "عُدّلت" if item.get("score_adjusted") else ("لم تتم المعايرة" if item.get("original_score") is not None and item.get("calibrated_score") is None else "دون تعديل"),
+            "حالة التعديل": item.get("result_status", "غير محددة"),
             "سبب المعايرة": item.get("calibration_reason", "—"),
             "الشاهد من النص": item.get("evidence", ""),
             "التبرير": item.get("rationale", ""),
